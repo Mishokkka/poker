@@ -1,0 +1,11 @@
+globalThis.btoa ??= (value) => Buffer.from(value, "binary").toString("base64");
+globalThis.atob ??= (value) => Buffer.from(value, "base64").toString("binary");
+const { SessionCrypto } = await import("../scripts/network/crypto.js");
+const alice = new SessionCrypto();
+const bob = new SessionCrypto();
+await alice.initialize();
+await bob.initialize();
+const encrypted = await alice.encrypt(bob.publicKey, { cards: ["As", "Kd"] });
+const decrypted = await bob.decrypt(alice.publicKey, encrypted);
+if (decrypted.cards.join(",") !== "As,Kd") throw new Error("Crypto round-trip failed");
+console.log("Crypto test passed.");

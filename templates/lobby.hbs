@@ -1,0 +1,47 @@
+<section class="fbl-poker-lobby-body">
+  <header class="fbl-poker-toolbar">
+    <div class="fbl-poker-toolbar-title">
+      <span class="fbl-poker-toolbar-emblem"><i class="fa-solid fa-spade"></i></span>
+      <div>
+        <h2>{{localize "FBLPoker.Lobby.Heading"}}</h2>
+        <p>{{localize "FBLPoker.Lobby.Subtitle"}}</p>
+        {{#unless hasHost}}<p class="fbl-poker-warning"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "FBLPoker.Errors.NoActiveGM"}}</p>{{/unless}}
+      </div>
+    </div>
+    <div class="fbl-poker-toolbar-actions">
+      <button class="fbl-poker-icon-button" type="button" data-action="refresh" title="{{localize 'FBLPoker.Common.Refresh'}}" aria-label="{{localize 'FBLPoker.Common.Refresh'}}"><i class="fa-solid fa-rotate"></i></button>
+      {{#if isGM}}<button class="fbl-poker-primary" type="button" data-action="createTable"><i class="fa-solid fa-plus"></i> {{localize "FBLPoker.Lobby.Create"}}</button>{{/if}}
+    </div>
+  </header>
+
+  <div class="fbl-poker-table-list">
+    {{#each tables}}
+      <article class="fbl-poker-lobby-card">
+        <div class="fbl-poker-lobby-card-main">
+          <div class="fbl-poker-card-heading">
+            <span class="fbl-poker-status-dot"></span>
+            <h3>{{name}}</h3>
+          </div>
+          <div class="fbl-poker-chips">
+            <span><i class="fa-solid fa-signal"></i> {{statusLabel}}</span>
+            <span><i class="fa-solid fa-chair"></i> {{occupied}} / {{maxSeats}}</span>
+            <span><i class="fa-solid fa-coins"></i> {{smallBlind}} / {{bigBlind}}</span>
+            {{#if ante}}<span>{{localize "FBLPoker.Fields.Ante"}}: {{ante}}</span>{{/if}}
+          </div>
+          <p class="fbl-poker-card-meta">{{localize "FBLPoker.Fields.BuyIn"}}: <strong>{{minBuyIn}}–{{maxBuyIn}}</strong></p>
+        </div>
+        <div class="fbl-poker-lobby-card-actions">
+          <button class="fbl-poker-primary" type="button" data-action="openTable" data-table-id="{{id}}"><i class="fa-solid fa-door-open"></i> {{localize "FBLPoker.Lobby.Open"}}</button>
+          {{#if ../isGM}}<button class="fbl-poker-icon-button danger" type="button" data-action="deleteTable" data-table-id="{{id}}" title="{{localize 'FBLPoker.Common.Delete'}}" aria-label="{{localize 'FBLPoker.Common.Delete'}}"><i class="fa-solid fa-trash"></i></button>{{/if}}
+        </div>
+      </article>
+    {{else}}
+      <div class="fbl-poker-empty-state">
+        <span class="fbl-poker-empty-emblem"><i class="fa-solid fa-spade"></i></span>
+        <strong>{{localize "FBLPoker.Lobby.EmptyTitle"}}</strong>
+        <p>{{localize "FBLPoker.Lobby.Empty"}}</p>
+        {{#if isGM}}<button class="fbl-poker-primary" type="button" data-action="createTable"><i class="fa-solid fa-plus"></i> {{localize "FBLPoker.Lobby.Create"}}</button>{{/if}}
+      </div>
+    {{/each}}
+  </div>
+</section>

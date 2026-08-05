@@ -1,0 +1,82 @@
+<section class="fbl-poker-form">
+  <header class="fbl-poker-form-intro">
+    <span class="fbl-poker-toolbar-emblem"><i class="fa-solid fa-table-cells-large"></i></span>
+    <div>
+      <h2>{{localize "FBLPoker.Create.Heading"}}</h2>
+      <p>{{localize "FBLPoker.Create.Subtitle"}}</p>
+    </div>
+  </header>
+
+  <fieldset class="fbl-poker-fieldset">
+    <legend>{{localize "FBLPoker.Create.Sections.General"}}</legend>
+    <div class="form-group fbl-poker-span-2">
+      <label for="fbl-poker-table-name">{{localize "FBLPoker.Fields.Name"}}</label>
+      <input id="fbl-poker-table-name" type="text" name="name" value="{{localize 'FBLPoker.Create.DefaultName'}}" maxlength="80" autocomplete="off" required>
+    </div>
+    <div class="fbl-poker-form-grid">
+      <div class="form-group">
+        <label for="fbl-poker-max-seats">{{localize "FBLPoker.Fields.MaxSeats"}}</label>
+        <input id="fbl-poker-max-seats" type="number" name="maxSeats" value="{{defaults.maxSeats}}" min="2" max="10" required>
+      </div>
+      <div class="form-group">
+        <label for="fbl-poker-action-seconds">{{localize "FBLPoker.Fields.ActionSeconds"}}</label>
+        <input id="fbl-poker-action-seconds" type="number" name="actionSeconds" value="{{defaults.actionSeconds}}" min="10" max="300" required>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset class="fbl-poker-fieldset">
+    <legend>{{localize "FBLPoker.Create.Sections.Structure"}}</legend>
+    <div class="fbl-poker-form-grid">
+      <div class="form-group">
+        <label for="fbl-poker-small-blind">{{localize "FBLPoker.Fields.SmallBlind"}}</label>
+        <input id="fbl-poker-small-blind" type="number" name="smallBlind" value="{{defaults.smallBlind}}" min="0" required>
+      </div>
+      <div class="form-group">
+        <label for="fbl-poker-big-blind">{{localize "FBLPoker.Fields.BigBlind"}}</label>
+        <input id="fbl-poker-big-blind" type="number" name="bigBlind" value="{{defaults.bigBlind}}" min="1" required>
+      </div>
+      <div class="form-group">
+        <label for="fbl-poker-ante">{{localize "FBLPoker.Fields.Ante"}}</label>
+        <input id="fbl-poker-ante" type="number" name="ante" value="{{defaults.ante}}" min="0" required>
+      </div>
+      <div class="form-group">
+        <label for="fbl-poker-chip-value">{{localize "FBLPoker.Fields.ChipValueCopper"}}</label>
+        <input id="fbl-poker-chip-value" type="number" name="chipValueCopper" value="{{defaults.chipValueCopper}}" min="1" required>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset class="fbl-poker-fieldset">
+    <legend>{{localize "FBLPoker.Create.Sections.BuyIn"}}</legend>
+    <div class="fbl-poker-form-grid">
+      <div class="form-group">
+        <label for="fbl-poker-min-buy-in">{{localize "FBLPoker.Fields.MinBuyIn"}}</label>
+        <input id="fbl-poker-min-buy-in" type="number" name="minBuyIn" value="{{defaults.minBuyIn}}" min="1" required>
+      </div>
+      <div class="form-group">
+        <label for="fbl-poker-max-buy-in">{{localize "FBLPoker.Fields.MaxBuyIn"}}</label>
+        <input id="fbl-poker-max-buy-in" type="number" name="maxBuyIn" value="{{defaults.maxBuyIn}}" min="1" required>
+      </div>
+    </div>
+    <p class="fbl-poker-field-hint"><i class="fa-solid fa-circle-info"></i> {{localize "FBLPoker.Create.CurrencyHint"}}</p>
+  </fieldset>
+
+  <fieldset class="fbl-poker-fieldset">
+    <legend>{{localize "FBLPoker.Create.Sections.Automation"}}</legend>
+    <div class="fbl-poker-form-grid">
+      <label class="fbl-poker-checkbox-row">
+        <input type="checkbox" name="autoNextHand" {{#if defaults.autoNextHand}}checked{{/if}}>
+        <span>{{localize "FBLPoker.Fields.AutoNextHand"}}</span>
+      </label>
+      <div class="form-group">
+        <label for="fbl-poker-auto-next-seconds">{{localize "FBLPoker.Fields.AutoNextHandSeconds"}}</label>
+        <input id="fbl-poker-auto-next-seconds" type="number" name="autoNextHandSeconds" value="{{defaults.autoNextHandSeconds}}" min="1" max="120" required>
+      </div>
+    </div>
+  </fieldset>
+
+  <footer class="fbl-poker-form-footer">
+    <button class="fbl-poker-primary" type="button" data-action="submitTable"><i class="fa-solid fa-plus"></i> {{localize "FBLPoker.Create.Submit"}}</button>
+  </footer>
+</section>

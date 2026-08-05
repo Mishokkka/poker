@@ -1,0 +1,64 @@
+{{#if missing}}
+<section class="fbl-poker-missing">{{localize "FBLPoker.Errors.TableMissing"}}</section>
+{{else}}
+<section class="fbl-poker-seat-dialog-body">
+  <header>
+    <div class="fbl-poker-toolbar-emblem"><i class="fa-solid fa-chair"></i></div>
+    <div>
+      <h2>{{table.name}}</h2>
+      <p>{{localize "FBLPoker.SeatDialog.Seat"}} {{seatNumber}}</p>
+    </div>
+  </header>
+
+  {{#if blockedElsewhere}}
+    <div class="fbl-poker-seat-dialog-warning">
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      <span>{{localize "FBLPoker.SeatDialog.AlreadyAtOtherTable"}} <strong>{{blockingSeat.tableName}}</strong></span>
+    </div>
+  {{else if moveMode}}
+    <div class="fbl-poker-seat-dialog-move">
+      <img src="{{ownSeat.actorImg}}" alt="{{ownSeat.actorName}}">
+      <div>
+        <strong>{{ownSeat.actorName}}</strong>
+        <span>{{localize "FBLPoker.SeatDialog.MoveFrom"}} {{ownSeat.index}} {{localize "FBLPoker.SeatDialog.MoveTo"}} {{seatNumber}}</span>
+      </div>
+    </div>
+  {{else}}
+    <label>
+      <span>{{localize "FBLPoker.Table.SelectActor"}}</span>
+      <select name="actorId">
+        <option value="">{{localize "FBLPoker.Table.SelectActor"}}</option>
+        {{#each actors}}<option value="{{id}}">{{name}} · {{balance}} cp</option>{{/each}}
+      </select>
+    </label>
+    <label>
+      <span>{{localize "FBLPoker.Table.BuyIn"}}</span>
+      <input type="number" name="buyIn" min="{{table.minBuyIn}}" max="{{table.maxBuyIn}}" value="{{defaultBuyIn}}">
+    </label>
+    {{#if isGM}}
+      <label>
+        <span>{{localize "FBLPoker.Bots.Controller"}}</span>
+        <select name="botLevel">
+          <option value="">{{localize "FBLPoker.Bots.Manual"}}</option>
+          {{#each botLevels}}<option value="{{value}}">{{label}}</option>{{/each}}
+        </select>
+      </label>
+      <label data-bot-personality hidden>
+        <span>{{localize "FBLPoker.Bots.Personality"}}</span>
+        <select name="botPersonality">
+          {{#each botPersonalities}}<option value="{{value}}">{{label}}</option>{{/each}}
+        </select>
+      </label>
+      <small class="fbl-poker-bot-hint">{{localize "FBLPoker.Bots.SeatHint"}}</small>
+    {{/if}}
+    <small>{{table.minBuyIn}}–{{table.maxBuyIn}} · 1 {{localize "FBLPoker.Table.Chip"}} = {{table.chipValueCopper}} cp</small>
+  {{/if}}
+
+  <footer>
+    <button type="button" class="fbl-poker-primary" data-action="confirmSeat" {{#unless canConfirm}}disabled{{/unless}}>
+      <i class="fa-solid {{#if moveMode}}fa-arrows-left-right{{else}}fa-chair{{/if}}"></i>
+      {{#if moveMode}}{{localize "FBLPoker.SeatDialog.Move"}}{{else}}{{localize "FBLPoker.Table.TakeSeat"}}{{/if}}
+    </button>
+  </footer>
+</section>
+{{/if}}

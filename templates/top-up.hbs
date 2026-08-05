@@ -1,0 +1,36 @@
+{{#if missing}}
+<section class="fbl-poker-missing">{{localize "FBLPoker.Errors.ActorMissing"}}</section>
+{{else}}
+<section class="fbl-poker-form fbl-poker-top-up-form">
+  <header class="fbl-poker-form-intro">
+    <img class="fbl-poker-top-up-portrait" src="{{seat.actorImg}}" alt="{{seat.actorName}}">
+    <div>
+      <h2>{{seat.actorName}}</h2>
+      <p>{{localize "FBLPoker.TopUp.Subtitle"}}</p>
+    </div>
+  </header>
+
+  <div class="fbl-poker-top-up-summary">
+    <span>{{localize "FBLPoker.TopUp.CurrentStack"}} <strong>{{seat.stack}}</strong></span>
+    <span>{{localize "FBLPoker.TopUp.Wallet"}} <strong>{{balance.totalCopper}} cp</strong></span>
+    <span>{{localize "FBLPoker.TopUp.TableMaximum"}} <strong>{{table.maxBuyIn}}</strong></span>
+  </div>
+
+  {{#if canSubmit}}
+    <div class="form-group">
+      <label for="fbl-poker-top-up-amount">{{localize "FBLPoker.TopUp.Amount"}}</label>
+      <input id="fbl-poker-top-up-amount" type="number" name="amount" min="1" max="{{maximum}}" value="{{suggested}}" required>
+    </div>
+    <div class="fbl-poker-bet-presets">
+      <button type="button" data-action="fillTopUp" data-amount="{{suggested}}">{{localize "FBLPoker.TopUp.Suggested"}}</button>
+      <button type="button" data-action="fillTopUp" data-amount="{{maximum}}">{{localize "FBLPoker.TopUp.Maximum"}}</button>
+    </div>
+    <p class="fbl-poker-field-hint"><i class="fa-solid fa-circle-info"></i> {{localize "FBLPoker.TopUp.MaximumHint"}} {{maximum}} {{localize "FBLPoker.Table.Chips"}} / {{costMaximum}} cp.</p>
+    <footer class="fbl-poker-form-footer">
+      <button class="fbl-poker-primary" type="button" data-action="submitTopUp"><i class="fa-solid fa-coins"></i> {{localize "FBLPoker.TopUp.Submit"}}</button>
+    </footer>
+  {{else}}
+    <div class="fbl-poker-empty-state compact"><strong>{{localize "FBLPoker.TopUp.Unavailable"}}</strong><p>{{localize "FBLPoker.TopUp.UnavailableHint"}}</p></div>
+  {{/if}}
+</section>
+{{/if}}

@@ -1,0 +1,60 @@
+{{#if missing}}
+<section class="fbl-poker-missing">{{localize "FBLPoker.Errors.TableMissing"}}</section>
+{{else}}
+<section class="fbl-poker-history-shell">
+  <header class="fbl-poker-toolbar compact">
+    <div class="fbl-poker-toolbar-title">
+      <span class="fbl-poker-toolbar-emblem"><i class="fa-solid fa-clock-rotate-left"></i></span>
+      <div><h2>{{table.name}}</h2><p>{{localize "FBLPoker.History.Subtitle"}}</p></div>
+    </div>
+    <button class="fbl-poker-primary" type="button" data-action="exportHistory" {{#unless hasHistory}}disabled{{/unless}}><i class="fa-solid fa-file-export"></i> {{localize "FBLPoker.History.Export"}}</button>
+  </header>
+
+  <div class="fbl-poker-history-list">
+    {{#each histories}}
+      <details class="fbl-poker-history-hand" {{#if @first}}open{{/if}}>
+        <summary>
+          <span><strong>#{{handNumber}}</strong> · {{completedLabel}}</span>
+          <span>{{smallBlind}} / {{bigBlind}}{{#if ante}} + {{localize "FBLPoker.Fields.Ante"}} {{ante}}{{/if}}</span>
+          <span><i class="fa-solid fa-coins"></i> {{potTotal}}</span>
+        </summary>
+        <div class="fbl-poker-history-content">
+          <div class="fbl-poker-history-board">
+            <span>{{localize "FBLPoker.History.Board"}}</span>
+            <div class="fbl-poker-community small">
+              {{#each communityCards}}<div class="fbl-poker-card community-card {{#if red}}red{{/if}}"><span class="fbl-poker-card-corner top"><span>{{rank}}</span><span>{{symbol}}</span></span><b class="fbl-poker-card-center">{{symbol}}</b><span class="fbl-poker-card-corner bottom"><span>{{rank}}</span><span>{{symbol}}</span></span></div>{{else}}<em>{{localize "FBLPoker.History.NoBoard"}}</em>{{/each}}
+            </div>
+          </div>
+
+          <div class="fbl-poker-history-awards">
+            {{#each awards}}<span><i class="fa-solid fa-trophy"></i> <strong>{{actorName}}</strong> +{{amount}}{{#if categoryLabel}} · {{categoryLabel}}{{/if}}</span>{{/each}}
+          </div>
+
+          <table class="fbl-poker-history-players">
+            <thead><tr><th>{{localize "FBLPoker.History.Player"}}</th><th>{{localize "FBLPoker.History.Cards"}}</th><th>{{localize "FBLPoker.History.Stack"}}</th><th>{{localize "FBLPoker.History.Result"}}</th></tr></thead>
+            <tbody>
+              {{#each participants}}
+                <tr class="{{#if won}}winner{{/if}}">
+                  <td>{{actorName}}{{#if folded}} <small>({{localize "FBLPoker.Actions.fold"}})</small>{{/if}}</td>
+                  <td><div class="fbl-poker-inline-cards">{{#each cardsView}}<span class="{{#if red}}red{{/if}}">{{rank}}{{symbol}}</span>{{else}}<span>—</span>{{/each}}</div></td>
+                  <td>{{startingStack}} → {{endingStack}}</td>
+                  <td class="{{#if won}}positive{{/if}}">{{#if won}}+{{/if}}{{delta}}</td>
+                </tr>
+              {{/each}}
+            </tbody>
+          </table>
+
+          <details class="fbl-poker-history-actions">
+            <summary>{{localize "FBLPoker.History.Actions"}} ({{actions.length}})</summary>
+            <ol>
+              {{#each actions}}<li>{{#if actorName}}<strong>{{actorName}}</strong> {{/if}}{{text}}{{#if amount}} <b>{{amount}}</b>{{/if}}</li>{{/each}}
+            </ol>
+          </details>
+        </div>
+      </details>
+    {{else}}
+      <div class="fbl-poker-empty-state"><span class="fbl-poker-empty-emblem"><i class="fa-solid fa-clock-rotate-left"></i></span><strong>{{localize "FBLPoker.History.Empty"}}</strong></div>
+    {{/each}}
+  </div>
+</section>
+{{/if}}
