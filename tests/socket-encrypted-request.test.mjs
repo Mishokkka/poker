@@ -87,12 +87,13 @@ try {
 
   assert.equal(socket.tables.size, 0, "A non-GM encrypted request must still be rejected by host authorization.");
   const errorEnvelope = emitted.findLast(({ payload }) => payload.type === REQUEST.PRIVATE && payload.recipient === player.id)?.payload;
+  assert.ok(errorEnvelope, "The host must return an encrypted error envelope for a rejected request.");
   const error = await playerCrypto.decrypt(errorEnvelope.senderPublicKey, errorEnvelope.encrypted);
   assert.equal(error.kind, "error");
   assert.equal(error.requestId, requestId);
   assert.equal(error.message, "FBLPoker.Errors.GMOnly");
 } finally {
-  socket.shutdown();
+  await socket.shutdown();
 }
 
 console.log("Encrypted remote request routing and authorization test passed.");

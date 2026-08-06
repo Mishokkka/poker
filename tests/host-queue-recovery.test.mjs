@@ -38,7 +38,10 @@ const service = new PokerHostService(socket);
 
 try {
   await service.initialize();
-  const session = service.registerSession(gm.id, { mode: "ecdh", jwk: { x: "x", y: "y" } });
+  const keyPair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveKey"]);
+  const publicKey = { mode: "ecdh", jwk: await crypto.subtle.exportKey("jwk", keyPair.publicKey) };
+  assert.equal(await service.registerSession(gm.id, { mode: "ecdh", jwk: { x: "x", y: "y" } }), null, "Malformed ECDH keys must be rejected before entering the session store.");
+  const session = await service.registerSession(gm.id, publicKey);
   assert.ok(session);
 
   await service.enqueue({
@@ -70,7 +73,7 @@ try {
 
   assert.equal(service.tables.size, 1, "A failed private error delivery must not poison the host queue.");
 } finally {
-  service.shutdown();
+  await service.shutdown();
 }
 
 console.log("Host queue recovery test passed.");

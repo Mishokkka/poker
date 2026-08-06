@@ -9,6 +9,26 @@ function base64ToBytes(value) {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
+export async function validateEcdhPublicKey(peerKeyEnvelope) {
+  const subtle = globalThis.crypto?.subtle;
+  const jwk = peerKeyEnvelope?.jwk;
+  if (!subtle || peerKeyEnvelope?.mode !== "ecdh" || !jwk || typeof jwk !== "object" || Array.isArray(jwk)) return false;
+  if (jwk.kty !== "EC" || jwk.crv !== "P-256" || typeof jwk.x !== "string" || !jwk.x || typeof jwk.y !== "string" || !jwk.y) return false;
+
+  try {
+    const key = await subtle.importKey(
+      "jwk",
+      jwk,
+      { name: "ECDH", namedCurve: "P-256" },
+      false,
+      []
+    );
+    return key.type === "public" && key.algorithm?.name === "ECDH" && key.algorithm?.namedCurve === "P-256";
+  } catch {
+    return false;
+  }
+}
+
 function privateTransportError(cause = null) {
   const error = new Error("FBLPoker.Errors.PrivateTransportUnavailable");
   if (cause) error.cause = cause;

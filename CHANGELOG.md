@@ -1,3 +1,13 @@
+## 1.7.5
+
+- Validated remote P-256 ECDH public keys before storing poker sessions.
+- Rejected private packets on player clients until the active host key is established, and rejected packets signed by any different key afterward.
+- Drained accepted host operations before shutdown so buy-in, top-up, and cash-out wallet changes finish table persistence before session teardown.
+- Rejected null, blank, boolean, array, fractional, and otherwise malformed currency, seat, stack, configuration, bet, and timer inputs instead of coercing them.
+- Rejected string and numeric impostors for socket boolean controls.
+- Tagged public snapshots with their producing host and ignored stale snapshots after host handoff.
+- Clarified partial table-deletion payout recovery and expanded encryption, lifecycle, coercion, and shutdown-boundary regression tests.
+
 ## 1.7.4
 
 - Removed the readable private-payload fallback. Poker now requires Web Crypto and fails closed when secure ECDH/AES-GCM transport is unavailable.

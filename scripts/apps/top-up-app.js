@@ -71,7 +71,7 @@ export class TopUpApp extends HandlebarsApplicationMixin(ApplicationV2) {
     try {
       const form = this.form ?? this.element;
       if (typeof form.reportValidity === "function" && !form.reportValidity()) return;
-      const amount = Number(new FormData(form).get("amount"));
+      const amount = Number.parseInt(new FormData(form).get("amount"), 10);
       await getPokerSocket().request(REQUEST.TOP_UP, {
         tableId: this.tableId,
         seatIndex: this.seatIndex,

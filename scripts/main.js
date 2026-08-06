@@ -4,7 +4,6 @@ import { PokerLobbyApp } from "./apps/lobby-app.js";
 import { PokerTableApp } from "./apps/table-app.js";
 import { PokerSocket } from "./network/socket.js";
 import { setPokerSocket } from "./runtime.js";
-import { notifyError } from "./util.js";
 
 let socket = null;
 let lobby = null;
@@ -110,7 +109,8 @@ Hooks.once("ready", async () => {
     await candidate.initialize();
   } catch (error) {
     candidate.shutdown();
-    notifyError(error);
+    console.error("FBL Poker | Initialization failed", error);
+    ui.notifications?.error(game.i18n.localize("FBLPoker.Errors.InitializationFailed"));
     return;
   }
 
@@ -130,7 +130,5 @@ Hooks.once("ready", async () => {
 });
 
 Hooks.on("updateUser", () => {
-  setTimeout(() => {
-    socket?.refreshHostRole().catch((error) => notifyError(error));
-  }, 250);
+  setTimeout(() => socket?.refreshHostRole(), 250);
 });

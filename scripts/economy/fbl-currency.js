@@ -7,14 +7,20 @@ const PATHS = Object.freeze({
   copper: "system.currency.copper.value"
 });
 
+function numericInput(value) {
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && value.trim()) return Number(value);
+  return Number.NaN;
+}
+
 function nonNegativeCurrencyInteger(value) {
-  const number = Number(value);
+  const number = numericInput(value);
   if (!Number.isSafeInteger(number) || number < 0) throw new Error("FBLPoker.Errors.InvalidCurrencyChange");
   return number;
 }
 
 function positiveRate(value, fallback) {
-  const number = Number(value);
+  const number = numericInput(value);
   return Number.isSafeInteger(number) && number > 0 ? number : fallback;
 }
 
@@ -43,7 +49,7 @@ export class CurrencyAdapter {
   }
 
   denominations(totalCopper) {
-    const total = Number(totalCopper);
+    const total = numericInput(totalCopper);
     if (!Number.isSafeInteger(total) || total < 0) throw new Error("FBLPoker.Errors.InvalidCurrencyChange");
     const rates = this.rates;
     let remaining = total;
@@ -55,7 +61,7 @@ export class CurrencyAdapter {
   }
 
   async change(actor, deltaCopper, metadata = {}) {
-    const delta = Number(deltaCopper);
+    const delta = numericInput(deltaCopper);
     if (!Number.isSafeInteger(delta)) throw new Error("FBLPoker.Errors.InvalidCurrencyChange");
 
     const before = this.balance(actor);
