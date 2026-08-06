@@ -62,9 +62,10 @@ await pokerSocket.request(REQUEST.CREATE_TABLE, {
 
 assert.equal(pokerSocket.tables.size, 1, "The host must receive its own table snapshot locally");
 assert.equal([...pokerSocket.tables.values()][0].name, "Local Host Test");
-assert.ok(emitted.some(({ payload }) => payload.type === REQUEST.SNAPSHOT), "Snapshots should still be sent to remote clients");
+const snapshot = emitted.findLast(({ payload }) => payload.type === REQUEST.SNAPSHOT)?.payload;
+assert.equal(snapshot?.hostUserId, hostUser.id, "Public snapshots must identify the active host that produced them.");
 } finally {
-  pokerSocket.shutdown();
+  await pokerSocket.shutdown();
 }
 
 console.log("Local host socket test passed.");

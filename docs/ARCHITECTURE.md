@@ -10,9 +10,9 @@
 
 ## Authority
 
-All clients submit requested actions. The active GM validates session, ownership, seat, turn, stack, table state and bet size before mutating the table. Public snapshots are then broadcast to every client.
+All clients submit requested actions. The active GM validates session, ownership, seat, turn, stack, table state and bet size before mutating the table. Public snapshots identify the active GM that produced them, and clients ignore snapshots from a previous host after authority changes.
 
-Currency operations are serialized through the host queue. If a buy-in or top-up cannot be committed to the table after wallet deduction, the wallet change is rolled back.
+Currency operations are serialized through the host queue. Once host retirement begins, new requests are rejected while already accepted operations drain through wallet mutation, table persistence, and response delivery before session state is cleared. If a buy-in or top-up cannot be committed to the table after wallet deduction, the wallet change is rolled back.
 
 ## Private cards
 

@@ -4,6 +4,21 @@ import { createTableState, migrateTableState, PokerTableEngine } from "../engine
 import { PokerStorage } from "../storage.js";
 import { isHostClient, randomId } from "../util.js";
 import { botThinkDelay, chooseBotAction, normalizeBotLevel, normalizeBotPersonality } from "../bots/bot-player.js";
+import { validateEcdhPublicKey } from "./crypto.js";
+
+function safeInteger(value) {
+  if (typeof value === "number") return Number.isSafeInteger(value) ? value : null;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function requestBoolean(value) {
+  if (typeof value !== "boolean") throw new Error("FBLPoker.Errors.InvalidRequest");
+  return value;
+}
 
 export class PokerHostService {
   constructor(socket) {
@@ -17,16 +32,20 @@ export class PokerHostService {
     this.autoNextTimers = new Map();
     this.rejectedTables = new Map();
     this.queue = Promise.resolve();
+    this.retiring = false;
     this.stopped = false;
+    this.shutdownPromise = null;
   }
 
   async initialize() {
+    this.retiring = false;
     this.stopped = false;
+    this.shutdownPromise = null;
     this.tables.clear();
     this.rejectedTables.clear();
 
     const stored = await this.storage.loadTables();
-    if (this.stopped) return;
+    if (this.stopped || this.retiring) return;
 
     const worldSchemaVersion = Number(game.settings.get(MODULE_ID, "schemaVersion")) || 0;
     if (worldSchemaVersion > SCHEMA_VERSION) throw new Error("FBLPoker.Errors.UnsupportedSchema");
@@ -43,15 +62,15 @@ export class PokerHostService {
       }
     }
 
-    if (this.stopped) return;
+    if (this.stopped || this.retiring) return;
     for (const engine of this.tables.values()) this.#scheduleAutoNext(engine);
     await this.persist();
-    if (this.stopped) return;
+    if (this.stopped || this.retiring) return;
 
     if (worldSchemaVersion < SCHEMA_VERSION) {
       await game.settings.set(MODULE_ID, "schemaVersion", SCHEMA_VERSION);
     }
-    if (this.stopped) return;
+    if (this.stopped || this.retiring) return;
 
     await this.broadcastAll();
     if (this.rejectedTables.size) {
@@ -60,6 +79,12 @@ export class PokerHostService {
   }
 
   enqueue(payload) {
+    if (this.stopped || this.retiring) {
+      return Promise.resolve()
+        .then(() => this.socket.sendError(payload.userId, new Error("FBLPoker.Errors.NotReady"), payload.requestId))
+        .catch((deliveryError) => console.error("FBL Poker | Could not deliver host request error", deliveryError));
+    }
+
     const operation = this.queue.then(async () => {
       await this.handle(payload);
       await this.socket.sendAck(payload.userId, payload.requestId);
@@ -75,6 +100,7 @@ export class PokerHostService {
   }
 
   enqueueLocal(payload) {
+    if (this.stopped || this.retiring) return Promise.reject(new Error("FBLPoker.Errors.NotReady"));
     const operation = this.queue.then(() => this.handle(payload));
     this.queue = operation.catch(() => undefined);
     return operation;
@@ -98,30 +124,39 @@ export class PokerHostService {
   }
 
   shutdown() {
-    this.stopped = true;
+    if (this.shutdownPromise) return this.shutdownPromise;
+
+    this.retiring = true;
     for (const tableId of [...this.turnTimers.keys()]) this.#clearTimer(tableId);
     for (const tableId of [...this.botTimers.keys()]) this.#clearBotTimer(tableId);
     for (const tableId of [...this.autoNextTimers.keys()]) this.#clearAutoNextTimer(tableId);
-    this.sessions.clear();
+
+    const drain = this.queue.catch(() => undefined);
+    this.shutdownPromise = drain.finally(() => {
+      this.stopped = true;
+      this.sessions.clear();
+    });
+    return this.shutdownPromise;
   }
 
-  registerSession(userId, publicKey) {
-    if (this.stopped || publicKey?.mode !== "ecdh" || !publicKey.jwk) return null;
+  async registerSession(userId, publicKey) {
+    if (this.stopped || this.retiring || !(await validateEcdhPublicKey(publicKey))) return null;
+    if (this.stopped || this.retiring) return null;
     const user = game.users.get(userId);
     if (!user) return null;
-    const session = { userId, publicKey, token: randomId("session-"), createdAt: Date.now() };
+    const session = { userId, publicKey: structuredClone(publicKey), token: randomId("session-"), createdAt: Date.now() };
     this.sessions.set(userId, session);
     return session;
   }
 
   isBotSeat(tableId, seatIndex) {
-    const index = Number(seatIndex);
-    if (!Number.isSafeInteger(index)) return false;
+    const index = safeInteger(seatIndex);
+    if (index === null) return false;
     return Boolean(this.tables.get(tableId)?.state?.seats?.[index]?.isBot);
   }
 
   async handle(payload) {
-    if (this.stopped) throw new Error("FBLPoker.Errors.NotReady");
+    if (this.stopped || this.retiring) throw new Error("FBLPoker.Errors.NotReady");
     const session = this.#validateSession(payload);
     const user = game.users.get(session.userId);
     switch (payload.type) {
@@ -207,7 +242,7 @@ export class PokerHostService {
   async broadcastAll() {
     if (this.stopped) return;
     const tables = [...this.tables.values()].map((engine) => engine.publicState());
-    this.socket.publishSnapshot(tables);
+    await this.socket.publishSnapshot(tables);
   }
 
   async #mutated(engine, { sendHands = false, resetTurn = false, resetAutoNext = false } = {}) {
@@ -295,10 +330,12 @@ export class PokerHostService {
     if (!user.isGM && [...this.tables.values()].some((other) => other.state.seats.some((seat) => seat?.userId === user.id))) {
       throw new Error("FBLPoker.Errors.UserAlreadySeated");
     }
-    const buyIn = Number(data.buyIn);
-    if (!Number.isSafeInteger(buyIn) || buyIn < engine.state.minBuyIn || buyIn > engine.state.maxBuyIn) {
+    const buyIn = safeInteger(data.buyIn);
+    if (buyIn === null || buyIn < engine.state.minBuyIn || buyIn > engine.state.maxBuyIn) {
       throw new Error("FBLPoker.Errors.BuyInRange");
     }
+    const seatIndex = safeInteger(data.seatIndex);
+    if (seatIndex === null) throw new Error("FBLPoker.Errors.InvalidSeat");
     const cost = buyIn * engine.state.chipValueCopper;
     if (!Number.isSafeInteger(cost)) throw new Error("FBLPoker.Errors.InvalidCurrencyChange");
     const balance = this.currency.balance(actor);
@@ -308,7 +345,6 @@ export class PokerHostService {
       reason: chargedCost < cost ? "pokerBotBuyInGMOverride" : "pokerBuyIn",
       tableId: engine.state.id
     });
-    const seatIndex = Number(data.seatIndex);
     let seated = false;
     try {
       engine.addSeat(seatIndex, {
@@ -343,8 +379,8 @@ export class PokerHostService {
   async #moveSeat(user, data) {
     const engine = this.#table(data.tableId);
     if (engine.isActiveHand) throw new Error("FBLPoker.Errors.HandInProgress");
-    const fromIndex = Number(data.fromSeatIndex);
-    const toIndex = Number(data.toSeatIndex);
+    const fromIndex = safeInteger(data.fromSeatIndex);
+    const toIndex = safeInteger(data.toSeatIndex);
     const seat = this.#ownedSeat(engine, user, fromIndex);
     if (!user.isGM) {
       const ownedSeats = [...this.tables.values()].flatMap((other) => other.state.seats.filter((candidate) => candidate?.userId === user.id));
@@ -360,8 +396,8 @@ export class PokerHostService {
     const seat = this.#ownedSeat(engine, user, data.seatIndex);
     const actor = game.actors.get(seat.actorId);
     if (!actor) throw new Error("FBLPoker.Errors.ActorMissing");
-    const chips = Number(data.amount);
-    if (!Number.isSafeInteger(chips) || chips < 1) throw new Error("FBLPoker.Errors.InvalidTopUp");
+    const chips = safeInteger(data.amount);
+    if (chips === null || chips < 1) throw new Error("FBLPoker.Errors.InvalidTopUp");
     if ((seat.stack + chips) > engine.state.maxBuyIn) throw new Error("FBLPoker.Errors.TopUpLimit");
     const cost = chips * engine.state.chipValueCopper;
     const transaction = await this.currency.change(actor, -cost, { reason: "pokerTopUp", tableId: engine.state.id });
@@ -448,14 +484,14 @@ export class PokerHostService {
 
   async #setAutoNext(tableId, enabled) {
     const engine = this.#table(tableId);
-    engine.setAutoNext(Boolean(enabled));
+    engine.setAutoNext(requestBoolean(enabled));
     await this.#mutated(engine, { resetAutoNext: true });
   }
 
   async #setCardsRevealed(user, data) {
     const engine = this.#table(data.tableId);
     const seat = this.#ownedSeat(engine, user, data.seatIndex);
-    engine.setCardsRevealed(seat.index, Boolean(data.revealed));
+    engine.setCardsRevealed(seat.index, requestBoolean(data.revealed));
     await this.#mutated(engine);
   }
 
@@ -499,7 +535,7 @@ export class PokerHostService {
 
   #scheduleTurn(engine, { reset = false } = {}) {
     this.#clearTimer(engine.state.id);
-    if (this.stopped) return;
+    if (this.stopped || this.retiring) return;
     this.#clearBotTimer(engine.state.id);
     if (engine.state.paused || !ACTIVE_STREETS.has(engine.state.status) || engine.state.currentSeat === null) {
       engine.state.turnDeadline = null;
@@ -526,7 +562,7 @@ export class PokerHostService {
       const operation = this.queue.then(async () => {
         if (this.turnTimers.get(engine.state.id) !== timer) return;
         this.turnTimers.delete(engine.state.id);
-        if (this.stopped || !isHostClient() || engine.state.paused || engine.state.revision !== revision || engine.state.currentSeat !== seatIndex) return;
+        if (this.stopped || this.retiring || !isHostClient() || engine.state.paused || engine.state.revision !== revision || engine.state.currentSeat !== seatIndex) return;
         const legal = engine.legalActions(seatIndex);
         if (!legal) return;
         engine.act(seatIndex, legal.canCheck ? ACTIONS.CHECK : ACTIONS.FOLD);
@@ -540,7 +576,7 @@ export class PokerHostService {
 
   #scheduleBotTurn(engine) {
     this.#clearBotTimer(engine.state.id);
-    if (this.stopped) return;
+    if (this.stopped || this.retiring) return;
     if (engine.state.paused || !ACTIVE_STREETS.has(engine.state.status) || engine.state.currentSeat === null) return;
     const seatIndex = engine.state.currentSeat;
     const seat = engine.state.seats[seatIndex];
@@ -553,7 +589,7 @@ export class PokerHostService {
       const operation = this.queue.then(async () => {
         if (this.botTimers.get(engine.state.id) !== timer) return;
         this.botTimers.delete(engine.state.id);
-        if (this.stopped || !isHostClient()) return;
+        if (this.stopped || this.retiring || !isHostClient()) return;
         if (engine.state.paused || engine.state.revision !== revision || engine.state.handNumber !== handNumber || engine.state.currentSeat !== seatIndex) return;
         const currentSeat = engine.state.seats[seatIndex];
         if (!currentSeat?.isBot) return;
@@ -579,7 +615,7 @@ export class PokerHostService {
 
   #scheduleAutoNext(engine, { reset = false } = {}) {
     const tableId = engine.state.id;
-    if (this.stopped) {
+    if (this.stopped || this.retiring) {
       this.#clearAutoNextTimer(tableId);
       return;
     }
@@ -607,7 +643,7 @@ export class PokerHostService {
       const operation = this.queue.then(async () => {
         if (this.autoNextTimers.get(tableId) !== timer) return;
         this.autoNextTimers.delete(tableId);
-        if (this.stopped || !isHostClient()) return;
+        if (this.stopped || this.retiring || !isHostClient()) return;
         const current = this.tables.get(tableId);
         if (!current || current.state.status !== TABLE_STATUS.COMPLETE || current.state.handNumber !== handNumber || !current.state.autoNextHand) return;
         const available = current.state.seats.filter((seat) => seat && !seat.sittingOut && !seat.leaveAfterHand && seat.stack > 0).length;
@@ -663,8 +699,8 @@ export class PokerHostService {
   }
 
   #ownedSeat(engine, user, seatIndex) {
-    const index = Number(seatIndex);
-    if (!Number.isSafeInteger(index)) throw new Error("FBLPoker.Errors.EmptySeat");
+    const index = safeInteger(seatIndex);
+    if (index === null) throw new Error("FBLPoker.Errors.EmptySeat");
     const seat = engine.state.seats[index];
     if (!seat) throw new Error("FBLPoker.Errors.EmptySeat");
     if (!user?.isGM && seat.userId !== user?.id) throw new Error("FBLPoker.Errors.NotSeatOwner");

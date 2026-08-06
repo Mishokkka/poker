@@ -19,6 +19,10 @@ const nullableConfig = normalizeTableConfiguration({ name: "Nullable", autoNextH
 assert.equal(nullableConfig.autoNextHand, true, "Null checkbox values must preserve the configured fallback.");
 assert.throws(() => normalizeTableConfiguration({ name: "Fractional", maxSeats: "4.5" }), /SeatCountRange/);
 assert.throws(() => normalizeTableConfiguration({ name: "Malformed", bigBlind: "10chips" }), /BlindOrder/);
+assert.throws(() => normalizeTableConfiguration({ name: "Blank", maxSeats: "   " }), /SeatCountRange/, "Blank numeric configuration values must not become zero.");
+const nullIntegerConfig = normalizeTableConfiguration({ name: "Null integers", maxSeats: null, autoNextHandSeconds: null });
+assert.equal(nullIntegerConfig.maxSeats, 9, "Null integer configuration values must preserve defaults.");
+assert.equal(nullIntegerConfig.autoNextHandSeconds, 6);
 
 const legacy = migrateTableState({
   id: "legacy",
@@ -40,6 +44,20 @@ assert.throws(() => migrateTableState({ ...legacy, schemaVersion: SCHEMA_VERSION
 const fractionalStoredState = createTableState({ id: "fractional-state", name: "Fractional Stored", maxSeats: 2 });
 fractionalStoredState.seats[0] = { userId: "u", actorId: "a", actorName: "A", stack: 10.5 };
 assert.throws(() => new PokerTableEngine(fractionalStoredState), /InvalidTableState/);
+
+for (const invalidStack of [null, "", "   ", true, false, []]) {
+  const corrupt = createTableState({ id: `corrupt-${String(invalidStack)}`, name: "Corrupt Stored", maxSeats: 2 });
+  corrupt.seats[0] = { userId: "u", actorId: "a", actorName: "A", stack: invalidStack };
+  assert.throws(() => new PokerTableEngine(corrupt), /InvalidTableState/, `Stored stack ${JSON.stringify(invalidStack)} must not be coerced.`);
+}
+const invalidDeadlines = createTableState({ id: "invalid-deadlines", name: "Invalid Deadlines", maxSeats: 2 });
+invalidDeadlines.turnDeadline = false;
+invalidDeadlines.turnTimeRemaining = [];
+invalidDeadlines.nextHandDeadline = "   ";
+const normalizedDeadlines = new PokerTableEngine(invalidDeadlines).publicState();
+assert.equal(normalizedDeadlines.turnDeadline, null);
+assert.equal(normalizedDeadlines.turnTimeRemaining, null);
+assert.equal(normalizedDeadlines.nextHandDeadline, null);
 
 
 const pots = buildSidePots([
@@ -97,6 +115,8 @@ assert.equal(hu.currentSeat, hu.dealerIndex);
 // A non-all-in raise below the legal minimum is rejected.
 assert.throws(() => headsUp.act(hu.currentSeat, "raise", 3), /BelowMinimumRaise/);
 assert.throws(() => headsUp.act(hu.currentSeat, "raise", 4.5), /InvalidBet/);
+assert.throws(() => headsUp.act(hu.currentSeat, "raise", false), /InvalidBet/);
+assert.throws(() => headsUp.act(hu.currentSeat, "raise", "   "), /InvalidBet/);
 
 console.log("Extended rule tests passed.");
 
@@ -113,6 +133,8 @@ adminEngine.addChips(0, 25);
 assert.equal(adminEngine.publicState().seats[0].stack, 75);
 assert.throws(() => adminEngine.addChips(0, 200), /TopUpLimit/);
 assert.throws(() => adminEngine.addChips(0, 1.5), /InvalidTopUp/);
+assert.throws(() => adminEngine.addChips(0, false), /InvalidTopUp/);
+assert.throws(() => adminEngine.addChips(0, "   "), /InvalidTopUp/);
 
 // Pause blocks actions without changing the current actor or street.
 const pauseState = createTableState({ id: "pause", name: "Pause", maxSeats: 2, smallBlind: 1, bigBlind: 2, minBuyIn: 20, maxBuyIn: 100 });

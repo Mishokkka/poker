@@ -28,6 +28,24 @@ await assert.rejects(currency.change(actor, Number.POSITIVE_INFINITY), /InvalidC
 await assert.rejects(currency.change(actor, 1.5), /InvalidCurrencyChange/);
 assert.equal(actor.updates, 0, "Invalid deltas must not update the Actor document.");
 
+for (const invalid of [null, "", "   ", true, false, []]) {
+  const invalidActor = {
+    system: { currency: { gold: { value: invalid }, silver: { value: 0 }, copper: { value: 0 } } }
+  };
+  assert.throws(() => currency.balance(invalidActor), /InvalidCurrencyChange/, `Currency value ${JSON.stringify(invalid)} must not be coerced.`);
+  assert.throws(() => currency.denominations(invalid), /InvalidCurrencyChange/, `Denomination input ${JSON.stringify(invalid)} must not be coerced.`);
+  await assert.rejects(currency.change(actor, invalid), /InvalidCurrencyChange/, `Currency delta ${JSON.stringify(invalid)} must not be coerced.`);
+}
+assert.equal(actor.updates, 0, "Rejected coercible values must not update the Actor document.");
+
+for (const invalidRate of [null, "", "   ", true, false, []]) {
+  settings.set("fbl-poker-table.goldCopperRate", invalidRate);
+  settings.set("fbl-poker-table.silverCopperRate", invalidRate);
+  assert.deepEqual(currency.rates, { gold: 100, silver: 10, copper: 1 }, "Invalid rate settings must use safe defaults.");
+}
+settings.set("fbl-poker-table.goldCopperRate", 100);
+settings.set("fbl-poker-table.silverCopperRate", 10);
+
 const transaction = await currency.change(actor, -13);
 assert.equal(transaction.deltaCopper, -13);
 assert.deepEqual(transaction.after, { gold: 1, silver: 1, copper: 0, totalCopper: 110 });

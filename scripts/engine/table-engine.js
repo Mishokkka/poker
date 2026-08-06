@@ -15,23 +15,40 @@ function canAct(seat) {
   return inHand(seat) && !seat.folded && !seat.allIn;
 }
 
+function numericInput(value) {
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && value.trim()) return Number(value);
+  return null;
+}
+
+function safeInteger(value) {
+  const parsed = numericInput(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function finiteNumberOrNull(value, { nonNegative = false } = {}) {
+  if (value === undefined || value === null || (typeof value === "string" && !value.trim())) return null;
+  const parsed = numericInput(value);
+  if (!Number.isFinite(parsed) || (nonNegative && parsed < 0)) return null;
+  return parsed;
+}
+
 function integer(value, fallback) {
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : fallback;
+  return safeInteger(value) ?? fallback;
 }
 
 function configuredInteger(configuration, key, fallback, errorKey) {
   const value = configuration[key];
   if (value === undefined || value === null) return fallback;
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed)) throw new Error(errorKey);
+  const parsed = safeInteger(value);
+  if (parsed === null) throw new Error(errorKey);
   return parsed;
 }
 
 function storedNonNegativeInteger(value, fallback = 0) {
-  if (value === undefined || value === null || value === "") return fallback;
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error("FBLPoker.Errors.InvalidTableState");
+  if (value === undefined) return fallback;
+  const parsed = safeInteger(value);
+  if (parsed === null || parsed < 0) throw new Error("FBLPoker.Errors.InvalidTableState");
   return parsed;
 }
 
@@ -130,9 +147,9 @@ export function migrateTableState(source, fallbackSchemaVersion = 0) {
   migrated.handHistory = Array.isArray(migrated.handHistory) ? migrated.handHistory : [];
   migrated.autoNextHand = boolean(migrated.autoNextHand, DEFAULT_TABLE.autoNextHand);
   migrated.autoNextHandSeconds = integer(migrated.autoNextHandSeconds, DEFAULT_TABLE.autoNextHandSeconds);
-  migrated.nextHandDeadline = Number.isFinite(Number(migrated.nextHandDeadline)) ? Number(migrated.nextHandDeadline) : null;
-  migrated.turnDeadline = Number.isFinite(Number(migrated.turnDeadline)) ? Number(migrated.turnDeadline) : null;
-  migrated.turnTimeRemaining = Number.isFinite(Number(migrated.turnTimeRemaining)) ? Math.max(0, Number(migrated.turnTimeRemaining)) : null;
+  migrated.nextHandDeadline = finiteNumberOrNull(migrated.nextHandDeadline);
+  migrated.turnDeadline = finiteNumberOrNull(migrated.turnDeadline);
+  migrated.turnTimeRemaining = finiteNumberOrNull(migrated.turnTimeRemaining, { nonNegative: true });
 
   return migrated;
 }
@@ -197,9 +214,9 @@ export class PokerTableEngine {
       handParticipants: [...(state.handParticipants ?? [])],
       handActions: [...(state.handActions ?? [])],
       handHistory: [...(state.handHistory ?? [])].slice(0, 100),
-      turnDeadline: Number.isFinite(Number(state.turnDeadline)) ? Number(state.turnDeadline) : null,
-      turnTimeRemaining: Number.isFinite(Number(state.turnTimeRemaining)) ? Math.max(0, Number(state.turnTimeRemaining)) : null,
-      nextHandDeadline: Number.isFinite(Number(state.nextHandDeadline)) ? Number(state.nextHandDeadline) : null
+      turnDeadline: finiteNumberOrNull(state.turnDeadline),
+      turnTimeRemaining: finiteNumberOrNull(state.turnTimeRemaining, { nonNegative: true }),
+      nextHandDeadline: finiteNumberOrNull(state.nextHandDeadline)
     };
   }
 
@@ -292,8 +309,8 @@ export class PokerTableEngine {
   addChips(index, amount) {
     if (this.isActiveHand) throw new Error("FBLPoker.Errors.HandInProgress");
     const seat = this.#seat(index);
-    const chips = Number(amount);
-    if (!Number.isSafeInteger(chips) || chips < 1) throw new Error("FBLPoker.Errors.InvalidTopUp");
+    const chips = safeInteger(amount);
+    if (chips === null || chips < 1) throw new Error("FBLPoker.Errors.InvalidTopUp");
     if ((seat.stack + chips) > this.state.maxBuyIn) throw new Error("FBLPoker.Errors.TopUpLimit");
     seat.stack += chips;
     this.#log("topUp", index, chips);
@@ -548,8 +565,8 @@ export class PokerTableEngine {
       }
       case ACTIONS.BET:
       case ACTIONS.RAISE: {
-        const target = Number(amount);
-        if (!Number.isSafeInteger(target)) throw new Error("FBLPoker.Errors.InvalidBet");
+        const target = safeInteger(amount);
+        if (target === null) throw new Error("FBLPoker.Errors.InvalidBet");
         this.#raiseTo(index, target, previousActed, false);
         break;
       }
