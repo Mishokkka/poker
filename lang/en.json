@@ -127,7 +127,8 @@
       "CancelLeaveAfterHand": "Cancel leave after hand",
       "ShowCards": "Show cards",
       "HideCards": "Hide cards",
-      "CardVisibility": "Your cards after the hand"
+      "CardVisibility": "Your cards after the hand",
+      "SeatMenu": "Seat actions"
     },
     "Hands": {
       "highCard": "high card",
@@ -223,7 +224,13 @@
       "AutoNextTimeRange": "The automatic next-hand delay must be between 1 and 120 seconds.",
       "InvalidBotPersonality": "Unknown poker bot personality.",
       "CardsVisibilityUnavailable": "Cards can only be shown or hidden after the current hand is complete.",
-      "CardsUnavailable": "The private cards for this hand are no longer available."
+      "CardsUnavailable": "The private cards for this hand are no longer available.",
+      "InitializationFailed": "The poker module could not initialize. Reload Foundry and check the console for details.",
+      "InvalidTableState": "Stored poker table data is invalid.",
+      "UnsupportedSchema": "This world contains poker table data from a newer module version.",
+      "TableDeletePayoutFailed": "The table was deleted, but chips could not be returned to: {actors}. The failed payouts were recorded in the transaction ledger.",
+      "InvalidCurrencyChange": "The requested currency change is invalid.",
+      "PrivateTransportUnavailable": "Private poker data could not be decrypted on this client."
     },
     "CashOut": {
       "Title": "Leave Table",

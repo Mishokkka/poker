@@ -29,5 +29,5 @@ export function cardDisplay(card) {
   const rank = rawRank === "T" ? "10" : rawRank;
   const suit = cardSuit(card);
   const symbols = { s: "♠", h: "♥", d: "♦", c: "♣" };
-  return { rank, suit, symbol: symbols[suit], red: suit === "h" || suit === "d" };
+  return { rank, suit: suit || "?", symbol: symbols[suit] ?? "?", red: suit === "h" || suit === "d" };
 }

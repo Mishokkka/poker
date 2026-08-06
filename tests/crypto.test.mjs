@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+
 globalThis.btoa ??= (value) => Buffer.from(value, "binary").toString("base64");
 globalThis.atob ??= (value) => Buffer.from(value, "base64").toString("binary");
 const { SessionCrypto } = await import("../scripts/network/crypto.js");
@@ -5,7 +7,15 @@ const alice = new SessionCrypto();
 const bob = new SessionCrypto();
 await alice.initialize();
 await bob.initialize();
+assert.equal(alice.secure, true, "Node Web Crypto should exercise the encrypted transport.");
+assert.equal(bob.secure, true);
+assert.equal(alice.publicKey.mode, "ecdh");
+assert.ok(alice.publicKey.jwk && typeof alice.publicKey.jwk === "object");
+assert.equal("mode" in alice.publicKey.jwk, false, "Protocol metadata must not mutate the exported JWK.");
 const encrypted = await alice.encrypt(bob.publicKey, { cards: ["As", "Kd"] });
+assert.equal("plain" in encrypted, false, "Secure mode must not fall back to plaintext.");
+assert.equal(typeof encrypted.iv, "string");
+assert.equal(typeof encrypted.ciphertext, "string");
 const decrypted = await bob.decrypt(alice.publicKey, encrypted);
-if (decrypted.cards.join(",") !== "As,Kd") throw new Error("Crypto round-trip failed");
+assert.deepEqual(decrypted, { cards: ["As", "Kd"] });
 console.log("Crypto test passed.");

@@ -36,11 +36,13 @@ export class CreateTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
     event.preventDefault();
     try {
       const form = this.form ?? this.element;
-      const data = Object.fromEntries(new FormData(form).entries());
+      if (typeof form.reportValidity === "function" && !form.reportValidity()) return;
+      const formData = new FormData(form);
+      const data = Object.fromEntries(formData.entries());
       for (const key of ["maxSeats", "smallBlind", "bigBlind", "ante", "minBuyIn", "maxBuyIn", "actionSeconds", "chipValueCopper", "autoNextHandSeconds"]) {
         data[key] = Number.parseInt(data[key], 10);
       }
-      data.autoNextHand = new FormData(form).has("autoNextHand");
+      data.autoNextHand = formData.has("autoNextHand");
       data.name = String(data.name ?? "").trim();
       const normalized = normalizeTableConfiguration(data, { ...DEFAULT_TABLE, name: data.name });
       await getPokerSocket().request(REQUEST.CREATE_TABLE, normalized);

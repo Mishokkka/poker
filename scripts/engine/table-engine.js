@@ -23,7 +23,8 @@ function integer(value, fallback) {
 function boolean(value, fallback = false) {
   if (typeof value === "boolean") return value;
   if (value === "true" || value === "1" || value === 1) return true;
-  if (value === "false" || value === "0" || value === 0 || value === null) return false;
+  if (value === "false" || value === "0" || value === 0) return false;
+  if (value === null || value === undefined || value === "") return Boolean(fallback);
   return Boolean(fallback);
 }
 
@@ -92,6 +93,35 @@ function normalizeSeat(seat, index) {
   };
 }
 
+export function migrateTableState(source, fallbackSchemaVersion = 0) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    throw new Error("FBLPoker.Errors.InvalidTableState");
+  }
+
+  const sourceVersion = integer(source.schemaVersion, integer(fallbackSchemaVersion, 0));
+  if (sourceVersion > SCHEMA_VERSION) throw new Error("FBLPoker.Errors.UnsupportedSchema");
+
+  const migrated = structuredClone(source);
+  migrated.schemaVersion = SCHEMA_VERSION;
+  migrated.status = Object.values(TABLE_STATUS).includes(migrated.status) ? migrated.status : TABLE_STATUS.WAITING;
+  migrated.community = Array.isArray(migrated.community) ? migrated.community : [];
+  migrated.seats = Array.isArray(migrated.seats) ? migrated.seats : [];
+  migrated.acted = Array.isArray(migrated.acted) ? migrated.acted : [];
+  migrated.raiseLocked = Array.isArray(migrated.raiseLocked) ? migrated.raiseLocked : [];
+  migrated.pots = Array.isArray(migrated.pots) ? migrated.pots : [];
+  migrated.log = Array.isArray(migrated.log) ? migrated.log : [];
+  migrated.handParticipants = Array.isArray(migrated.handParticipants) ? migrated.handParticipants : [];
+  migrated.handActions = Array.isArray(migrated.handActions) ? migrated.handActions : [];
+  migrated.handHistory = Array.isArray(migrated.handHistory) ? migrated.handHistory : [];
+  migrated.autoNextHand = boolean(migrated.autoNextHand, DEFAULT_TABLE.autoNextHand);
+  migrated.autoNextHandSeconds = integer(migrated.autoNextHandSeconds, DEFAULT_TABLE.autoNextHandSeconds);
+  migrated.nextHandDeadline = Number.isFinite(Number(migrated.nextHandDeadline)) ? Number(migrated.nextHandDeadline) : null;
+  migrated.turnDeadline = Number.isFinite(Number(migrated.turnDeadline)) ? Number(migrated.turnDeadline) : null;
+  migrated.turnTimeRemaining = Number.isFinite(Number(migrated.turnTimeRemaining)) ? Math.max(0, Number(migrated.turnTimeRemaining)) : null;
+
+  return migrated;
+}
+
 export function createTableState(configuration = {}) {
   const normalized = normalizeTableConfiguration(configuration, { ...DEFAULT_TABLE, name: "Poker Table" });
   return {
@@ -131,10 +161,13 @@ export class PokerTableEngine {
   #holeCards = new Map();
 
   constructor(source) {
-    const state = source ?? createTableState();
-    const maxSeats = Math.min(10, Math.max(2, Number(state.maxSeats) || DEFAULT_TABLE.maxSeats));
+    const initial = source ?? createTableState();
+    const state = migrateTableState(initial, initial.schemaVersion ?? SCHEMA_VERSION);
+    const configuration = normalizeTableConfiguration(state, { ...DEFAULT_TABLE, name: state.name ?? "Poker Table" });
+    const maxSeats = configuration.maxSeats;
     this.state = {
       ...state,
+      ...configuration,
       schemaVersion: SCHEMA_VERSION,
       maxSeats,
       paused: Boolean(state.paused),

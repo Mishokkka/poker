@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { evaluateSeven, compareEvaluations } from "../scripts/engine/evaluator.js";
 import { buildSidePots } from "../scripts/engine/pots.js";
-import { createTableState, PokerTableEngine } from "../scripts/engine/table-engine.js";
+import { createTableState, migrateTableState, normalizeTableConfiguration, PokerTableEngine } from "../scripts/engine/table-engine.js";
 import { cardDisplay } from "../scripts/engine/cards.js";
+import { SCHEMA_VERSION } from "../scripts/constants.js";
 
 if (!globalThis.crypto) globalThis.crypto = (await import("node:crypto")).webcrypto;
 
@@ -12,6 +13,29 @@ assert.equal(royal.categoryName, "straightFlush");
 assert.equal(quads.categoryName, "fourKind");
 assert.equal(compareEvaluations(royal, quads), 1);
 assert.equal(cardDisplay("Ts").rank, "10");
+assert.deepEqual(cardDisplay("Tx"), { rank: "10", suit: "x", symbol: "?", red: false });
+
+const nullableConfig = normalizeTableConfiguration({ name: "Nullable", autoNextHand: null }, { ...createTableState({ name: "Base" }), autoNextHand: true });
+assert.equal(nullableConfig.autoNextHand, true, "Null checkbox values must preserve the configured fallback.");
+
+const legacy = migrateTableState({
+  id: "legacy",
+  name: "Legacy",
+  maxSeats: 2,
+  smallBlind: 1,
+  bigBlind: 2,
+  ante: 0,
+  minBuyIn: 20,
+  maxBuyIn: 100,
+  actionSeconds: 45,
+  chipValueCopper: 1,
+  seats: [null, null]
+}, 1);
+assert.equal(legacy.schemaVersion, SCHEMA_VERSION);
+assert.equal(legacy.autoNextHand, false);
+assert.deepEqual(legacy.handHistory, []);
+assert.throws(() => migrateTableState({ ...legacy, schemaVersion: SCHEMA_VERSION + 1 }), /UnsupportedSchema/);
+
 
 const pots = buildSidePots([
   { index: 0, handCommitted: 100, folded: false },

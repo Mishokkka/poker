@@ -1,5 +1,5 @@
 {{#if missing}}
-<section class="fbl-poker-missing">{{localize "FBLPoker.Errors.ActorMissing"}}</section>
+<section class="fbl-poker-missing">{{#if unsupportedCurrency}}{{localize "FBLPoker.Errors.UnsupportedCurrency"}}{{else}}{{localize "FBLPoker.Errors.ActorMissing"}}{{/if}}</section>
 {{else}}
 <section class="fbl-poker-form fbl-poker-top-up-form">
   <header class="fbl-poker-form-intro">
@@ -27,7 +27,7 @@
     </div>
     <p class="fbl-poker-field-hint"><i class="fa-solid fa-circle-info"></i> {{localize "FBLPoker.TopUp.MaximumHint"}} {{maximum}} {{localize "FBLPoker.Table.Chips"}} / {{costMaximum}} cp.</p>
     <footer class="fbl-poker-form-footer">
-      <button class="fbl-poker-primary" type="button" data-action="submitTopUp"><i class="fa-solid fa-coins"></i> {{localize "FBLPoker.TopUp.Submit"}}</button>
+      <button class="fbl-poker-primary" type="submit" data-action="submitTopUp"><i class="fa-solid fa-coins"></i> {{localize "FBLPoker.TopUp.Submit"}}</button>
     </footer>
   {{else}}
     <div class="fbl-poker-empty-state compact"><strong>{{localize "FBLPoker.TopUp.Unavailable"}}</strong><p>{{localize "FBLPoker.TopUp.UnavailableHint"}}</p></div>

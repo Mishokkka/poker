@@ -481,14 +481,83 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
   #bindSeatContextMenus() {
     this._dismissContextMenu?.();
     let portal = null;
+    let activeTrigger = null;
 
-    const closePortal = () => {
+    const closePortal = ({ restoreFocus = false } = {}) => {
       portal?.remove();
       portal = null;
+      if (activeTrigger) {
+        activeTrigger.setAttribute("aria-expanded", "false");
+        if (restoreFocus) activeTrigger.focus?.({ preventScroll: true });
+      }
+      activeTrigger = null;
     };
     const dismiss = (event) => {
-      if (portal?.contains(event?.target)) return;
+      if (portal?.contains(event?.target) || activeTrigger?.contains?.(event?.target)) return;
       closePortal();
+    };
+    const openPortal = (sourceMenu, { clientX, clientY, trigger = null }) => {
+      if (!sourceMenu) return;
+      closePortal();
+
+      const menu = sourceMenu.cloneNode(true);
+      menu.classList.remove("open-left", "open-up");
+      menu.classList.add("open", "fbl-poker-context-portal");
+      menu.style.left = "-10000px";
+      menu.style.top = "-10000px";
+      menu.style.visibility = "hidden";
+      document.body.append(menu);
+      portal = menu;
+      activeTrigger = trigger;
+      activeTrigger?.setAttribute("aria-expanded", "true");
+
+      const rect = menu.getBoundingClientRect();
+      const viewportWidth = document.documentElement?.clientWidth ?? window.innerWidth;
+      const viewportHeight = document.documentElement?.clientHeight ?? window.innerHeight;
+      const padding = 8;
+      const offset = 6;
+      let left = clientX + offset;
+      let top = clientY + offset;
+      if (left + rect.width + padding > viewportWidth) left = clientX - rect.width - offset;
+      if (top + rect.height + padding > viewportHeight) top = clientY - rect.height - offset;
+      left = Math.max(padding, Math.min(left, viewportWidth - rect.width - padding));
+      top = Math.max(padding, Math.min(top, viewportHeight - rect.height - padding));
+      menu.style.left = `${Math.round(left)}px`;
+      menu.style.top = `${Math.round(top)}px`;
+      menu.style.visibility = "visible";
+
+      menu.addEventListener("click", (menuEvent) => {
+        const target = menuEvent.target?.closest?.("[data-action]");
+        if (!target || !menu.contains(target)) return;
+        menuEvent.preventDefault();
+        menuEvent.stopPropagation();
+        const handler = PokerTableApp.DEFAULT_OPTIONS.actions?.[target.dataset.action];
+        closePortal();
+        if (typeof handler === "function") {
+          Promise.resolve(handler.call(this, menuEvent, target)).catch(notifyError);
+        }
+      });
+
+      menu.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closePortal({ restoreFocus: true });
+          return;
+        }
+        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+        const items = [...menu.querySelectorAll('button:not(:disabled)')];
+        if (!items.length) return;
+        event.preventDefault();
+        const current = items.indexOf(document.activeElement);
+        let next = current;
+        if (event.key === 'Home') next = 0;
+        else if (event.key === 'End') next = items.length - 1;
+        else if (event.key === 'ArrowDown') next = (current + 1 + items.length) % items.length;
+        else next = (current - 1 + items.length) % items.length;
+        items[next].focus({ preventScroll: true });
+      });
+
+      menu.querySelector("button:not(:disabled)")?.focus?.({ preventScroll: true });
     };
 
     document.addEventListener("pointerdown", dismiss, true);
@@ -504,50 +573,26 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
     };
 
     this.element?.querySelectorAll?.(".fbl-poker-seat[data-can-manage='true']").forEach((seatElement) => {
+      const sourceMenu = seatElement.querySelector("[data-seat-context-menu]");
+      const trigger = seatElement.querySelector("[data-seat-menu-trigger]");
+      if (!sourceMenu) return;
+
       seatElement.addEventListener("contextmenu", (event) => {
-        const sourceMenu = seatElement.querySelector("[data-seat-context-menu]");
-        if (!sourceMenu) return;
         event.preventDefault();
         event.stopPropagation();
-        closePortal();
+        openPortal(sourceMenu, { clientX: event.clientX, clientY: event.clientY });
+      });
 
-        const menu = sourceMenu.cloneNode(true);
-        menu.classList.remove("open-left", "open-up");
-        menu.classList.add("open", "fbl-poker-context-portal");
-        menu.style.left = "-10000px";
-        menu.style.top = "-10000px";
-        menu.style.visibility = "hidden";
-        document.body.append(menu);
-        portal = menu;
-
-        const rect = menu.getBoundingClientRect();
-        const viewportWidth = document.documentElement?.clientWidth ?? window.innerWidth;
-        const viewportHeight = document.documentElement?.clientHeight ?? window.innerHeight;
-        const padding = 8;
-        const offset = 6;
-        let left = event.clientX + offset;
-        let top = event.clientY + offset;
-        if (left + rect.width + padding > viewportWidth) left = event.clientX - rect.width - offset;
-        if (top + rect.height + padding > viewportHeight) top = event.clientY - rect.height - offset;
-        left = Math.max(padding, Math.min(left, viewportWidth - rect.width - padding));
-        top = Math.max(padding, Math.min(top, viewportHeight - rect.height - padding));
-        menu.style.left = `${Math.round(left)}px`;
-        menu.style.top = `${Math.round(top)}px`;
-        menu.style.visibility = "visible";
-
-        menu.addEventListener("click", (menuEvent) => {
-          const target = menuEvent.target?.closest?.("[data-action]");
-          if (!target || !menu.contains(target)) return;
-          menuEvent.preventDefault();
-          menuEvent.stopPropagation();
-          const handler = PokerTableApp.DEFAULT_OPTIONS.actions?.[target.dataset.action];
-          closePortal();
-          if (typeof handler === "function") {
-            Promise.resolve(handler.call(this, menuEvent, target)).catch(notifyError);
-          }
-        });
-
-        menu.querySelector("button:not(:disabled)")?.focus?.({ preventScroll: true });
+      trigger?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = trigger.getBoundingClientRect();
+        openPortal(sourceMenu, { clientX: rect.right, clientY: rect.bottom, trigger });
+      });
+      trigger?.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowDown") return;
+        event.preventDefault();
+        trigger.click();
       });
     });
   }

@@ -9,7 +9,7 @@ A Foundry VTT module for character-based No-Limit Texas Hold'em using Forbidden 
 - Application V2 UI
 - No external module dependency
 
-## Implemented in 1.6.0
+## Implemented in 1.7.3
 
 - 2–10 seat No-Limit Texas Hold'em cash tables
 - dealer button, small blind, big blind and ante
@@ -17,6 +17,7 @@ A Foundry VTT module for character-based No-Limit Texas Hold'em using Forbidden 
 - minimum-raise validation and short all-in reopening rules
 - side pots, ties and odd-chip allocation
 - automatic flop, turn, river and showdown
+- configurable automatic continuation to the next hand
 - encrypted delivery of hole cards using Web Crypto ECDH + AES-GCM on secure browser contexts
 - automatic compatibility transport for remote players connected over plain HTTP
 - active-GM authoritative game engine
@@ -34,7 +35,6 @@ A Foundry VTT module for character-based No-Limit Texas Hold'em using Forbidden 
 - safe recovery of interrupted hands by refunding committed bets
 - Russian and English localization
 - scene-control button and `Ctrl+Shift+P` shortcut
-
 
 ## Poker bots
 
@@ -81,10 +81,10 @@ Foundry module code runs on trusted clients, so this is not a hostile-client ant
 
 See `docs/MANUAL.md`, `docs/ARCHITECTURE.md`, and `docs/KNOWN-LIMITATIONS.md`.
 
+## Current interface
 
-### Version 1.4 interface
+The table uses a full-window felt, lower-left action log, lower-right betting dock, title-bar GM controls, seat-selection dialog, one-seat-per-player enforcement, between-hand seat movement, and lightweight card/chip animations. Seat actions can be opened with the visible three-dot button, keyboard controls, or right-click.
 
-The table uses a full-window felt, lower-left action log, lower-right betting dock, title-bar GM controls, seat-selection dialog, one-seat-per-player enforcement, between-hand seat movement, right-click seat management, and lightweight card/chip animations.
 ## Sounds
 
 The table includes built-in card, chip, action, turn, and victory sounds. A GM can open the speaker button in the poker-table title bar to replace any sound and set its volume independently. Setting a volume to zero disables that event.

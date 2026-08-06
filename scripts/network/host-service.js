@@ -1,6 +1,6 @@
-import { ACTIONS, ACTIVE_STREETS, REQUEST, TABLE_STATUS } from "../constants.js";
+import { ACTIONS, ACTIVE_STREETS, MODULE_ID, REQUEST, SCHEMA_VERSION, TABLE_STATUS } from "../constants.js";
 import { CurrencyAdapter } from "../economy/fbl-currency.js";
-import { createTableState, PokerTableEngine } from "../engine/table-engine.js";
+import { createTableState, migrateTableState, PokerTableEngine } from "../engine/table-engine.js";
 import { PokerStorage } from "../storage.js";
 import { isHostClient, randomId } from "../util.js";
 import { botThinkDelay, chooseBotAction, normalizeBotLevel, normalizeBotPersonality } from "../bots/bot-player.js";
@@ -20,15 +20,18 @@ export class PokerHostService {
 
   async initialize() {
     const stored = await this.storage.loadTables();
-    let recovered = false;
+    const worldSchemaVersion = Number(game.settings.get(MODULE_ID, "schemaVersion")) || 0;
     for (const [id, value] of Object.entries(stored)) {
-      const engine = new PokerTableEngine(value);
-      recovered = engine.rollbackActiveHand() || recovered;
+      const migrated = migrateTableState(value, worldSchemaVersion);
+      const engine = new PokerTableEngine(migrated);
+      engine.rollbackActiveHand();
       this.tables.set(id, engine);
     }
-    if (recovered) await this.persist();
     for (const engine of this.tables.values()) this.#scheduleAutoNext(engine);
     await this.persist();
+    if (worldSchemaVersion !== SCHEMA_VERSION) {
+      await game.settings.set(MODULE_ID, "schemaVersion", SCHEMA_VERSION);
+    }
     await this.broadcastAll();
   }
 
@@ -195,16 +198,44 @@ export class PokerHostService {
   async #deleteTable(tableId) {
     const engine = this.#table(tableId);
     if (engine.isActiveHand) throw new Error("FBLPoker.Errors.HandInProgress");
+
+    const failedPayouts = [];
     for (const seat of [...engine.state.seats.filter(Boolean)]) {
-      await this.#creditSeat(engine, seat, "tableDeleted");
-      engine.removeSeat(seat.index);
+      try {
+        await this.#creditSeat(engine, seat, "tableDeleted");
+      } catch (error) {
+        failedPayouts.push({ seat, error });
+        console.error(`FBL Poker | Could not return chips to ${seat.actorName ?? seat.actorId} while deleting table`, error);
+        await this.storage.appendLedger({
+          id: randomId("tx-failed-"),
+          at: Date.now(),
+          tableId: engine.state.id,
+          tableName: engine.state.name,
+          actorId: seat.actorId,
+          actorName: seat.actorName,
+          userId: seat.userId ?? null,
+          reason: "tableDeletePayoutFailed",
+          status: "failed",
+          chips: seat.stack,
+          copper: seat.stack * engine.state.chipValueCopper,
+          error: error instanceof Error ? error.message : String(error)
+        }).catch((ledgerError) => console.error("FBL Poker | Could not record failed table-deletion payout", ledgerError));
+      } finally {
+        engine.removeSeat(seat.index);
+      }
     }
+
     this.tables.delete(tableId);
     this.#clearTimer(tableId);
     this.#clearBotTimer(tableId);
     this.#clearAutoNextTimer(tableId);
     await this.persist();
     await this.broadcastAll();
+
+    if (failedPayouts.length) {
+      const actors = failedPayouts.map(({ seat }) => seat.actorName ?? seat.actorId).join(", ");
+      throw new Error(game.i18n.format("FBLPoker.Errors.TableDeletePayoutFailed", { actors }));
+    }
   }
 
   async #join(user, data) {
@@ -223,9 +254,12 @@ export class PokerHostService {
     if (!user.isGM && [...this.tables.values()].some((other) => other.state.seats.some((seat) => seat?.userId === user.id))) {
       throw new Error("FBLPoker.Errors.UserAlreadySeated");
     }
-    const buyIn = Math.trunc(Number(data.buyIn));
-    if (buyIn < engine.state.minBuyIn || buyIn > engine.state.maxBuyIn) throw new Error("FBLPoker.Errors.BuyInRange");
+    const buyIn = Number(data.buyIn);
+    if (!Number.isSafeInteger(buyIn) || buyIn < engine.state.minBuyIn || buyIn > engine.state.maxBuyIn) {
+      throw new Error("FBLPoker.Errors.BuyInRange");
+    }
     const cost = buyIn * engine.state.chipValueCopper;
+    if (!Number.isSafeInteger(cost)) throw new Error("FBLPoker.Errors.InvalidCurrencyChange");
     const balance = this.currency.balance(actor);
     const chargedCost = user.isGM ? Math.min(cost, balance.totalCopper) : cost;
     const transaction = await this.currency.change(actor, -chargedCost, {
@@ -284,8 +318,8 @@ export class PokerHostService {
     const seat = this.#ownedSeat(engine, user, data.seatIndex);
     const actor = game.actors.get(seat.actorId);
     if (!actor) throw new Error("FBLPoker.Errors.ActorMissing");
-    const chips = Math.trunc(Number(data.amount));
-    if (!Number.isFinite(chips) || chips < 1) throw new Error("FBLPoker.Errors.InvalidTopUp");
+    const chips = Number(data.amount);
+    if (!Number.isSafeInteger(chips) || chips < 1) throw new Error("FBLPoker.Errors.InvalidTopUp");
     if ((seat.stack + chips) > engine.state.maxBuyIn) throw new Error("FBLPoker.Errors.TopUpLimit");
     const cost = chips * engine.state.chipValueCopper;
     const transaction = await this.currency.change(actor, -cost, { reason: "pokerTopUp", tableId: engine.state.id });
@@ -444,17 +478,18 @@ export class PokerHostService {
 
     const deadline = Date.now() + Math.max(0, duration);
     engine.state.turnDeadline = deadline;
-    const timer = setTimeout(async () => {
-      try {
+    let timer = null;
+    timer = setTimeout(() => {
+      const operation = this.queue.then(async () => {
+        if (this.turnTimers.get(engine.state.id) === timer) this.turnTimers.delete(engine.state.id);
         if (!isHostClient() || engine.state.paused || engine.state.revision !== revision || engine.state.currentSeat !== seatIndex) return;
         const legal = engine.legalActions(seatIndex);
         if (!legal) return;
         engine.act(seatIndex, legal.canCheck ? ACTIONS.CHECK : ACTIONS.FOLD);
         await this.#mutated(engine, { resetTurn: true });
         await this.#afterCompletedHand(engine);
-      } catch (error) {
-        console.error("FBL Poker | Turn timer failed", error);
-      }
+      });
+      this.queue = operation.catch((error) => console.error("FBL Poker | Turn timer failed", error));
     }, Math.max(0, duration));
     this.turnTimers.set(engine.state.id, timer);
   }
@@ -516,9 +551,10 @@ export class PokerHostService {
     }
     engine.state.nextHandDeadline = Date.now() + duration;
     const handNumber = engine.state.handNumber;
-    const timer = setTimeout(() => {
+    let timer = null;
+    timer = setTimeout(() => {
       const operation = this.queue.then(async () => {
-        this.autoNextTimers.delete(tableId);
+        if (this.autoNextTimers.get(tableId) === timer) this.autoNextTimers.delete(tableId);
         if (!isHostClient()) return;
         const current = this.tables.get(tableId);
         if (!current || current.state.status !== TABLE_STATUS.COMPLETE || current.state.handNumber !== handNumber || !current.state.autoNextHand) return;

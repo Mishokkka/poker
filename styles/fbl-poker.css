@@ -18,6 +18,7 @@
   --poker-felt: #174737;
   --poker-felt-dark: #09261d;
   --poker-shadow: 0 14px 38px rgb(0 0 0 / 42%);
+
   color: var(--poker-text);
   color-scheme: dark;
 }
@@ -148,8 +149,7 @@
   padding: 0 !important;
 }
 
-.fbl-poker-toolbar,
-.fbl-poker-table-header {
+.fbl-poker-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -203,7 +203,6 @@
 }
 
 .fbl-poker-toolbar-actions,
-.fbl-poker-table-header > div,
 .fbl-poker-lobby-card-actions,
 .fbl-poker-chips {
   display: flex;
@@ -436,20 +435,6 @@
   color: var(--poker-text);
 }
 
-.fbl-poker-table-header {
-  min-height: 50px;
-  padding: 10px 14px;
-}
-
-.fbl-poker-table-header > div:first-child strong {
-  color: var(--poker-accent-strong) !important;
-}
-
-.fbl-poker-table-header span {
-  color: var(--poker-muted) !important;
-  font-size: 12px;
-}
-
 .fbl-poker-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 260px;
@@ -568,19 +553,6 @@
   box-shadow: none;
 }
 
-.fbl-poker-turn-clock {
-  padding: 4px 9px;
-  border-radius: 5px;
-  background: rgb(0 0 0 / 56%);
-}
-
-.fbl-poker-side-pots {
-  display: flex;
-  gap: 5px;
-  color: var(--poker-muted);
-  font-size: 11px;
-}
-
 .fbl-poker-seat {
   position: absolute;
   z-index: 2;
@@ -663,23 +635,6 @@
 
 .fbl-poker-markers .dealer {
   background: var(--poker-accent);
-}
-
-.fbl-poker-seat-menu {
-  position: absolute;
-  right: 4px;
-  top: -29px;
-  display: none;
-  gap: 3px;
-}
-
-.fbl-poker-seat:hover .fbl-poker-seat-menu {
-  display: flex;
-}
-
-.fbl-poker-seat-menu button {
-  min-height: 25px;
-  padding: 2px 6px;
 }
 
 .fbl-poker-seat.empty {
@@ -893,10 +848,6 @@
   text-transform: uppercase;
 }
 
-.fbl-poker-turn-clock.paused {
-  color: var(--poker-accent-strong);
-}
-
 .fbl-poker-result-banner {
   display: grid;
   gap: 4px;
@@ -932,11 +883,6 @@
 
 .fbl-poker-seat-info em.danger-text {
   color: #ef9c9c !important;
-}
-
-.fbl-poker-seat-menu button.active {
-  border-color: var(--poker-accent-strong) !important;
-  box-shadow: 0 0 0 1px rgb(236 203 125 / 28%);
 }
 
 .fbl-poker-action-buttons .primary-action {
@@ -1195,11 +1141,6 @@
 }
 
 @media (max-width: 760px) {
-  .fbl-poker-table-header {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
   .fbl-poker-bet-controls {
     grid-template-columns: 1fr 80px;
   }
@@ -1377,13 +1318,6 @@
 
 .fbl-poker-markers {
   z-index: 5;
-}
-
-.fbl-poker-seat-menu {
-  right: 5px;
-  top: auto;
-  bottom: -31px;
-  z-index: 6;
 }
 
 .fbl-poker-seat.empty {
@@ -1610,24 +1544,6 @@
   filter: grayscale(1) brightness(0.42);
 }
 
-.fbl-poker-seat-menu {
-  position: absolute;
-  top: calc(100% + 24px);
-  left: 50%;
-  right: auto;
-  bottom: auto;
-  display: none;
-  gap: 4px;
-  z-index: 6;
-  transform: translateX(-50%);
-}
-
-.fbl-poker-seat:hover .fbl-poker-seat-menu,
-.fbl-poker-seat.own .fbl-poker-seat-menu,
-.fbl-poker-seat.current .fbl-poker-seat-menu {
-  display: flex;
-}
-
 .fbl-poker-turn-timer {
   position: absolute;
   top: calc(100% + 4px);
@@ -1671,12 +1587,6 @@
   height: 100%;
   border-radius: 999px;
   transition: width 240ms linear, background 240ms linear;
-}
-
-.fbl-poker-controls-strip {
-  display: flex;
-  justify-content: center;
-  padding: 12px 16px 14px;
 }
 
 .fbl-poker-action-panel {
@@ -1905,34 +1815,6 @@
   font-size: 14px;
 }
 
-.fbl-poker-seat-menu {
-  position: absolute;
-  right: 3px;
-  top: 3px;
-  bottom: 3px;
-  left: auto;
-  z-index: 8;
-  display: flex !important;
-  flex-direction: column;
-  gap: 3px;
-  width: 31px;
-  transform: none;
-}
-
-.fbl-poker-seat-menu button {
-  flex: 1 1 0;
-  width: 31px !important;
-  min-width: 31px !important;
-  min-height: 0 !important;
-  padding: 0 !important;
-  border-radius: 5px;
-}
-
-.fbl-poker-seat-menu button i {
-  margin: 0;
-  font-size: 12px;
-}
-
 .fbl-poker-hole-cards {
   left: 50%;
   top: -48px;
@@ -2017,7 +1899,7 @@
   color: var(--poker-accent-strong);
   box-shadow: 0 3px 8px rgb(0 0 0 / 48%);
   font-size: 11px;
-  transform: translate(-50%, -50%) translate(var(--bet-x), var(--bet-y));
+  transform: translate(-50%, -50%);
 }
 
 .fbl-poker-seat-bet i,
@@ -2231,10 +2113,6 @@
   --deal-y: -145px;
 }
 
-.fbl-poker-seat-bet.is-animated {
-  animation: fbl-poker-chip-commit 380ms cubic-bezier(.2, .8, .25, 1.1) both;
-}
-
 .fbl-poker-pot.is-animated {
   animation: fbl-poker-pot-pulse 420ms ease-out both;
 }
@@ -2251,21 +2129,6 @@
   100% {
     opacity: 1;
     transform: translate(0, 0) scale(1) rotate(0);
-  }
-}
-
-@keyframes fbl-poker-chip-commit {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, -50%) scale(.25);
-  }
-  65% {
-    opacity: 1;
-    transform: translate(-50%, -50%) translate(var(--bet-x), var(--bet-y)) scale(1.12);
-  }
-  100% {
-    opacity: 1;
-    transform: translate(-50%, -50%) translate(var(--bet-x), var(--bet-y)) scale(1);
   }
 }
 
@@ -2712,7 +2575,6 @@
   width: 52px;
 }
 
-.fbl-poker-seat-menu,
 .fbl-poker-bot-badge,
 .fbl-poker-waiting-action > i.fa-robot {
   display: none !important;
@@ -3091,6 +2953,7 @@
   --poker-muted: #b7b3aa;
   --poker-panel-3: #343d43;
   --poker-border: #465159;
+
   position: fixed;
   right: auto;
   bottom: auto;
@@ -3121,4 +2984,37 @@
 
 .fbl-poker-seat-context-menu.fbl-poker-context-portal span {
   color: inherit !important;
+}
+
+/* Accessible seat-action trigger. The source menu remains hidden until cloned into the viewport portal. */
+.fbl-poker-seat-menu-trigger {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  z-index: 15;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-color: rgb(255 255 255 / 18%) !important;
+  border-radius: 50%;
+  background: rgb(10 13 15 / 78%) !important;
+  color: var(--poker-muted) !important;
+  opacity: .82;
+}
+
+.fbl-poker-seat-menu-trigger:hover,
+.fbl-poker-seat-menu-trigger:focus-visible,
+.fbl-poker-seat-menu-trigger[aria-expanded="true"] {
+  border-color: var(--poker-accent) !important;
+  color: var(--poker-accent-strong) !important;
+  opacity: 1;
+}
+
+.fbl-poker-seat-menu-trigger:focus-visible {
+  outline: 2px solid var(--poker-accent);
+  outline-offset: 2px;
 }

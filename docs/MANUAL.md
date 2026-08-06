@@ -21,7 +21,7 @@ A single Actor cannot be seated at multiple module tables.
 
 ## NPC poker bots
 
-A GM can add a bot from the same dialog used to occupy an empty seat. Select an NPC Actor, enter the buy-in, and choose Novice, Experienced, or Expert in the seat-controller field. The Actor must have enough normal Forbidden Lands currency for the buy-in.
+A GM can add a bot from the same dialog used to occupy an empty seat. Select an NPC Actor, enter the buy-in, and choose Novice, Experienced, or Expert in the seat-controller field. A normal player-controlled Actor must have enough Forbidden Lands currency for the buy-in. A GM may seat an NPC with a full stack even when its wallet is short; the Actor pays only the currency currently available, and the table still grants the selected buy-in.
 
 Novice bots play loosely and make intentional errors. Experienced bots use equity, pot odds, and position. Expert bots run a larger local equity simulation and vary their sizing and bluffs. Bots act automatically after a short thinking delay. Their hidden cards remain concealed in the table UI until showdown.
 

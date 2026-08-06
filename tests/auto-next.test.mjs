@@ -77,13 +77,17 @@ await socket.request(REQUEST.ACTION, { tableId, seatIndex: actingSeat, action: A
 const completed = socket.getTable(tableId);
 assert.equal(completed.status, TABLE_STATUS.COMPLETE);
 assert.ok(completed.nextHandDeadline > Date.now());
-await new Promise((resolve) => setTimeout(resolve, 1250));
+const timeoutAt = Date.now() + 5000;
+while (socket.getTable(tableId).handNumber === firstHand && Date.now() < timeoutAt) {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+}
 const restarted = socket.getTable(tableId);
 assert.equal(restarted.handNumber, firstHand + 1, "Auto-next must start a new hand after the configured delay.");
 assert.equal(restarted.status, TABLE_STATUS.PREFLOP);
 
 await socket.request(REQUEST.FORCE_RESET, { tableId });
+assert.equal(socket.getTable(tableId).status, TABLE_STATUS.WAITING, "Force reset must return the table to its waiting state.");
 await socket.request(REQUEST.SET_AUTO_NEXT, { tableId, enabled: false });
 assert.equal(socket.getTable(tableId).autoNextHand, false);
-socket.hostService?.shutdown();
+socket.shutdown();
 console.log("Automatic next-hand test passed.");
