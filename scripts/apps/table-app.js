@@ -2,7 +2,7 @@ import { ACTIONS, ACTIVE_STREETS, REQUEST, TABLE_STATUS } from "../constants.js"
 import { PokerSoundService } from "../audio/sound-service.js";
 import { cardDisplay } from "../engine/cards.js";
 import { getPokerSocket } from "../runtime.js";
-import { notifyError } from "../util.js";
+import { notifyError, parseStrictInteger } from "../util.js";
 import { PokerHistoryApp } from "./history-app.js";
 import { PokerSoundSettingsApp } from "./sound-settings-app.js";
 import { SeatDialogApp } from "./seat-dialog-app.js";
@@ -716,7 +716,7 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
     try {
       const action = target.dataset.actionType;
       const amount = action === ACTIONS.BET || action === ACTIONS.RAISE
-        ? Number.parseInt(this.element.querySelector('[name="raiseAmount"]')?.value, 10)
+        ? parseStrictInteger(this.element.querySelector('[name="raiseAmount"]')?.value, "FBLPoker.Errors.InvalidBet")
         : null;
       const table = getPokerSocket().getTable(this.tableId);
       await getPokerSocket().request(REQUEST.ACTION, {

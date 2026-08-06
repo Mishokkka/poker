@@ -203,6 +203,7 @@ export class PokerSocket {
   }
 
   publishSnapshot(tables) {
+    if (this.closed || activeHost()?.id !== game.user?.id) return;
     const payload = { type: REQUEST.SNAPSHOT, hostUserId: game.user.id, tables };
     this.#applySnapshot(payload);
     this.broadcast(payload);

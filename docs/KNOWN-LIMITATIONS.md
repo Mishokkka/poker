@@ -1,6 +1,6 @@
 # Known Limitations
 
-Version 1.7.5 provides a complete cash-game No-Limit Texas Hold'em loop with table administration, top-ups, automated NPC opponents, sounds, automatic continuation, and public hand history. It does not include:
+Version 1.7.6 provides a complete cash-game No-Limit Texas Hold'em loop with table administration, top-ups, automated NPC opponents, sounds, automatic continuation, and public hand history. It does not include:
 
 - tournaments, blind schedules, re-entry, bounties, or table balancing
 - Pot-Limit Omaha, draw poker, or limit betting

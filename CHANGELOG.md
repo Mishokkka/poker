@@ -1,7 +1,14 @@
+## 1.7.6
+
+- Rejected decimal, exponent-form, partially numeric, blank, and unsafe-integer form values before sending table, seat, top-up, or betting requests.
+- Prevented a retiring GM host from applying or broadcasting stale local snapshots after host handoff.
+- Reported delayed host-role refresh failures instead of leaving rejected promises unhandled.
+- Restored fail-closed Web Crypto documentation and regression expectations, and awaited asynchronous socket shutdown in timer tests.
+
 ## 1.7.5
 
 - Validated remote P-256 ECDH public keys before storing poker sessions.
-- Rejected private packets on player clients until the active host key is established, and rejected packets signed by any different key afterward.
+- Rejected private packets on player clients until the active host key is established, and rejected packets from any different sender key afterward.
 - Drained accepted host operations before shutdown so buy-in, top-up, and cash-out wallet changes finish table persistence before session teardown.
 - Rejected null, blank, boolean, array, fractional, and otherwise malformed currency, seat, stack, configuration, bet, and timer inputs instead of coercing them.
 - Rejected string and numeric impostors for socket boolean controls.

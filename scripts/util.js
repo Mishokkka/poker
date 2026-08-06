@@ -17,6 +17,19 @@ export function clampInteger(value, min, max, fallback = min) {
   return Math.min(max, Math.max(min, parsed));
 }
 
+export function parseStrictInteger(value, errorKey) {
+  if (typeof value === "number") {
+    if (Number.isSafeInteger(value)) return value;
+    throw new Error(errorKey);
+  }
+  if (typeof value !== "string") throw new Error(errorKey);
+  const text = value.trim();
+  if (!/^[+-]?\d+$/u.test(text)) throw new Error(errorKey);
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) throw new Error(errorKey);
+  return parsed;
+}
+
 export function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
