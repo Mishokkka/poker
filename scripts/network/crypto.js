@@ -36,8 +36,8 @@ export class SessionCrypto {
         true,
         ["deriveKey"]
       );
-      this.#publicJwk = await subtle.exportKey("jwk", this.#keyPair.publicKey);
-      this.#publicJwk.mode = "ecdh";
+      const jwk = await subtle.exportKey("jwk", this.#keyPair.publicKey);
+      this.#publicJwk = { mode: "ecdh", jwk };
       this.#secure = true;
     } catch (error) {
       console.warn("FBL Poker | Web Crypto is unavailable; using compatibility transport.", error);
@@ -59,9 +59,10 @@ export class SessionCrypto {
     if (!this.#secure || !this.#keyPair || peerJwk?.mode === "plain") return null;
     const subtle = globalThis.crypto?.subtle;
     if (!subtle) return null;
+    const publicJwk = peerJwk?.jwk ?? peerJwk;
     const peerKey = await subtle.importKey(
       "jwk",
-      peerJwk,
+      publicJwk,
       { name: "ECDH", namedCurve: "P-256" },
       false,
       []

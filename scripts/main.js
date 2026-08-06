@@ -104,10 +104,18 @@ Hooks.on("getSceneControlButtons", (controls) => {
 });
 
 Hooks.once("ready", async () => {
-  socket = new PokerSocket();
-  setPokerSocket(socket);
-  await socket.initialize();
+  const candidate = new PokerSocket();
+  try {
+    await candidate.initialize();
+  } catch (error) {
+    candidate.shutdown();
+    console.error("FBL Poker | Initialization failed", error);
+    ui.notifications?.error(game.i18n.localize("FBLPoker.Errors.InitializationFailed"));
+    return;
+  }
 
+  socket = candidate;
+  setPokerSocket(socket);
   game.fblPoker = Object.freeze({
     openLobby,
     openTable,

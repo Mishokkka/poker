@@ -7,11 +7,22 @@ const PATHS = Object.freeze({
   copper: "system.currency.copper.value"
 });
 
+function finiteNonNegativeInteger(value, fallback = 0) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(0, Math.trunc(number));
+}
+
+function positiveRate(value, fallback) {
+  const number = Math.trunc(Number(value));
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
 export class CurrencyAdapter {
   get rates() {
     return {
-      gold: Math.max(1, Number(game.settings.get(MODULE_ID, "goldCopperRate")) || 100),
-      silver: Math.max(1, Number(game.settings.get(MODULE_ID, "silverCopperRate")) || 10),
+      gold: positiveRate(game.settings.get(MODULE_ID, "goldCopperRate"), 100),
+      silver: positiveRate(game.settings.get(MODULE_ID, "silverCopperRate"), 10),
       copper: 1
     };
   }
@@ -23,20 +34,19 @@ export class CurrencyAdapter {
   balance(actor) {
     if (!this.supports(actor)) throw new Error("FBLPoker.Errors.UnsupportedCurrency");
     const rates = this.rates;
-    return {
-      gold: Math.max(0, Number(getProperty(actor, PATHS.gold)) || 0),
-      silver: Math.max(0, Number(getProperty(actor, PATHS.silver)) || 0),
-      copper: Math.max(0, Number(getProperty(actor, PATHS.copper)) || 0),
-      totalCopper:
-        (Math.max(0, Number(getProperty(actor, PATHS.gold)) || 0) * rates.gold) +
-        (Math.max(0, Number(getProperty(actor, PATHS.silver)) || 0) * rates.silver) +
-        Math.max(0, Number(getProperty(actor, PATHS.copper)) || 0)
-    };
+    const gold = finiteNonNegativeInteger(getProperty(actor, PATHS.gold));
+    const silver = finiteNonNegativeInteger(getProperty(actor, PATHS.silver));
+    const copper = finiteNonNegativeInteger(getProperty(actor, PATHS.copper));
+    const totalCopper = (gold * rates.gold) + (silver * rates.silver) + copper;
+    if (!Number.isSafeInteger(totalCopper)) throw new Error("FBLPoker.Errors.InvalidCurrencyChange");
+    return { gold, silver, copper, totalCopper };
   }
 
   denominations(totalCopper) {
+    const total = Math.trunc(Number(totalCopper));
+    if (!Number.isSafeInteger(total) || total < 0) throw new Error("FBLPoker.Errors.InvalidCurrencyChange");
     const rates = this.rates;
-    let remaining = Math.max(0, Math.trunc(totalCopper));
+    let remaining = total;
     const gold = Math.floor(remaining / rates.gold);
     remaining -= gold * rates.gold;
     const silver = Math.floor(remaining / rates.silver);
@@ -45,16 +55,21 @@ export class CurrencyAdapter {
   }
 
   async change(actor, deltaCopper, metadata = {}) {
+    const delta = Number(deltaCopper);
+    if (!Number.isSafeInteger(delta)) throw new Error("FBLPoker.Errors.InvalidCurrencyChange");
+
     const before = this.balance(actor);
-    const afterTotal = before.totalCopper + Math.trunc(deltaCopper);
+    const afterTotal = before.totalCopper + delta;
+    if (!Number.isSafeInteger(afterTotal)) throw new Error("FBLPoker.Errors.InvalidCurrencyChange");
     if (afterTotal < 0) throw new Error("FBLPoker.Errors.NotEnoughCurrency");
+
     const after = this.denominations(afterTotal);
     await actor.update({
       [PATHS.gold]: after.gold,
       [PATHS.silver]: after.silver,
       [PATHS.copper]: after.copper
     }, { fblPoker: metadata });
-    return { before, after: { ...after, totalCopper: afterTotal }, deltaCopper: Math.trunc(deltaCopper) };
+    return { before, after: { ...after, totalCopper: afterTotal }, deltaCopper: delta };
   }
 
   actorOwnedBy(actor, user) {

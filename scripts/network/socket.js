@@ -1,5 +1,6 @@
-import { MODULE_ID, REQUEST, SOCKET_NAME } from "../constants.js";
+import { MODULE_ID, REQUEST, SCHEMA_VERSION, SOCKET_NAME } from "../constants.js";
 import { PokerHostService } from "./host-service.js";
+import { migrateTableState, PokerTableEngine } from "../engine/table-engine.js";
 import { SessionCrypto } from "./crypto.js";
 import { activeHost, isHostClient, localize, randomId } from "../util.js";
 
@@ -22,9 +23,28 @@ export class PokerSocket {
 
   async initialize() {
     game.socket.on(SOCKET_NAME, this.boundHandler);
-    this.#bootstrapFromStoredTables();
-    await this.crypto.initialize();
-    await this.refreshHostRole();
+    try {
+      this.#bootstrapFromStoredTables();
+      await this.crypto.initialize();
+      await this.refreshHostRole();
+    } catch (error) {
+      this.shutdown();
+      throw error;
+    }
+  }
+
+  shutdown() {
+    clearInterval(this.helloTimer);
+    this.helloTimer = null;
+    this.hostService?.shutdown();
+    this.hostService = null;
+    this.hostInitPromise = null;
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error(localize("FBLPoker.Errors.NotReady")));
+    }
+    this.pending.clear();
+    game?.socket?.off?.(SOCKET_NAME, this.boundHandler);
   }
 
   async refreshHostRole() {
@@ -52,8 +72,13 @@ export class PokerSocket {
       if (!this.hostInitPromise) {
         this.hostInitPromise = (async () => {
           const service = new PokerHostService(this);
-          await service.initialize();
-          this.hostService = service;
+          try {
+            await service.initialize();
+            this.hostService = service;
+          } catch (error) {
+            service.shutdown();
+            throw error;
+          }
         })().finally(() => { this.hostInitPromise = null; });
       }
       await this.hostInitPromise;
@@ -75,16 +100,10 @@ export class PokerSocket {
       if (!game?.settings?.get) return;
       const stored = game.settings.get(MODULE_ID, "tables");
       if (!stored || typeof stored !== "object") return;
+      const worldSchemaVersion = Number(game.settings.get(MODULE_ID, "schemaVersion")) || SCHEMA_VERSION;
       const tables = Object.values(stored)
         .filter((table) => table && typeof table === "object")
-        .map((table) => ({
-          ...table,
-          seats: (table.seats ?? []).map((seat) => {
-            if (!seat) return null;
-            const { isBot: _isBot, botLevel: _botLevel, botPersonality: _botPersonality, ...publicSeat } = seat;
-            return publicSeat;
-          })
-        }));
+        .map((table) => new PokerTableEngine(migrateTableState(table, worldSchemaVersion)).publicState());
       if (!tables.length) return;
       this.#applySnapshot({ tables });
     } catch (error) {
@@ -144,10 +163,17 @@ export class PokerSocket {
 
     if (!this.sessionToken) {
       this.hello();
-      await Promise.race([
-        this.sessionPromise,
-        new Promise((_, reject) => setTimeout(() => reject(new Error(localize("FBLPoker.Errors.SessionTimeout"))), 8000))
-      ]);
+      let sessionTimeout = null;
+      try {
+        await Promise.race([
+          this.sessionPromise,
+          new Promise((_, reject) => {
+            sessionTimeout = setTimeout(() => reject(new Error(localize("FBLPoker.Errors.SessionTimeout"))), 8000);
+          })
+        ]);
+      } finally {
+        clearTimeout(sessionTimeout);
+      }
     }
 
     const requestId = randomId("request-");

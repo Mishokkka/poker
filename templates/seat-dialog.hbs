@@ -26,14 +26,14 @@
   {{else}}
     <label>
       <span>{{localize "FBLPoker.Table.SelectActor"}}</span>
-      <select name="actorId">
+      <select name="actorId" required>
         <option value="">{{localize "FBLPoker.Table.SelectActor"}}</option>
         {{#each actors}}<option value="{{id}}">{{name}} · {{balance}} cp</option>{{/each}}
       </select>
     </label>
     <label>
       <span>{{localize "FBLPoker.Table.BuyIn"}}</span>
-      <input type="number" name="buyIn" min="{{table.minBuyIn}}" max="{{table.maxBuyIn}}" value="{{defaultBuyIn}}">
+      <input type="number" name="buyIn" min="{{table.minBuyIn}}" max="{{table.maxBuyIn}}" value="{{defaultBuyIn}}" required>
     </label>
     {{#if isGM}}
       <label>
@@ -55,7 +55,7 @@
   {{/if}}
 
   <footer>
-    <button type="button" class="fbl-poker-primary" data-action="confirmSeat" {{#unless canConfirm}}disabled{{/unless}}>
+    <button type="submit" class="fbl-poker-primary" data-action="confirmSeat" {{#unless canConfirm}}disabled{{/unless}}>
       <i class="fa-solid {{#if moveMode}}fa-arrows-left-right{{else}}fa-chair{{/if}}"></i>
       {{#if moveMode}}{{localize "FBLPoker.SeatDialog.Move"}}{{else}}{{localize "FBLPoker.Table.TakeSeat"}}{{/if}}
     </button>

@@ -38,7 +38,8 @@ export class TopUpApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const table = getPokerSocket().getTable(this.tableId);
     const seat = table?.seats?.[this.seatIndex];
     const actor = seat ? game.actors.get(seat.actorId) : null;
-    if (!table || !seat || !actor) return { ...context, missing: true };
+    if (!table || !seat || !actor) return { ...context, missing: true, unsupportedCurrency: false };
+    if (!currency.supports(actor)) return { ...context, missing: true, unsupportedCurrency: true };
 
     const balance = currency.balance(actor);
     const stackRoom = Math.max(0, table.maxBuyIn - seat.stack);
@@ -69,6 +70,7 @@ export class TopUpApp extends HandlebarsApplicationMixin(ApplicationV2) {
     event.preventDefault();
     try {
       const form = this.form ?? this.element;
+      if (typeof form.reportValidity === "function" && !form.reportValidity()) return;
       const amount = Number.parseInt(new FormData(form).get("amount"), 10);
       await getPokerSocket().request(REQUEST.TOP_UP, {
         tableId: this.tableId,

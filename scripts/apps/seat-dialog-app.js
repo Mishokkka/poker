@@ -9,6 +9,7 @@ const currency = new CurrencyAdapter();
 export class SeatDialogApp extends HandlebarsApplicationMixin(ApplicationV2) {
   static DEFAULT_OPTIONS = {
     classes: ["fbl-poker", "fbl-poker-seat-dialog"],
+    tag: "form",
     position: { width: 420, height: "auto" },
     window: {
       contentClasses: ["fbl-poker-content"],
@@ -91,8 +92,11 @@ export class SeatDialogApp extends HandlebarsApplicationMixin(ApplicationV2) {
     sync();
   }
 
-  static async confirmSeat() {
+  static async confirmSeat(event) {
+    event.preventDefault();
     try {
+      const form = this.form ?? this.element;
+      if (typeof form.reportValidity === "function" && !form.reportValidity()) return;
       const table = getPokerSocket().getTable(this.tableId);
       if (!table) throw new Error("FBLPoker.Errors.TableMissing");
       const ownSeat = table.seats.find((seat) => seat?.userId === game.user.id) ?? null;
@@ -104,10 +108,10 @@ export class SeatDialogApp extends HandlebarsApplicationMixin(ApplicationV2) {
           toSeatIndex: this.seatIndex
         });
       } else {
-        const actorId = this.element.querySelector('[name="actorId"]')?.value;
-        const buyIn = Number.parseInt(this.element.querySelector('[name="buyIn"]')?.value, 10);
-        const botLevel = game.user.isGM ? (this.element.querySelector('[name="botLevel"]')?.value || null) : null;
-        const botPersonality = botLevel ? (this.element.querySelector('[name="botPersonality"]')?.value || BOT_PERSONALITIES.CALM) : null;
+        const actorId = form.querySelector('[name="actorId"]')?.value;
+        const buyIn = Number.parseInt(form.querySelector('[name="buyIn"]')?.value, 10);
+        const botLevel = game.user.isGM ? (form.querySelector('[name="botLevel"]')?.value || null) : null;
+        const botPersonality = botLevel ? (form.querySelector('[name="botPersonality"]')?.value || BOT_PERSONALITIES.CALM) : null;
         if (!actorId) throw new Error("FBLPoker.Errors.SelectActor");
         await getPokerSocket().request(REQUEST.JOIN, {
           tableId: this.tableId,

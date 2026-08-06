@@ -1,3 +1,15 @@
+## 1.7.3
+
+- Added explicit stored-table schema migration and rejection of data created by unsupported newer module versions.
+- Made module startup fail safely without exposing a partially initialized API or leaving socket listeners and timers behind.
+- Serialized turn-timer actions through the same host queue as player, bot, and automatic-next-hand actions.
+- Hardened buy-in and Actor-currency validation against `NaN`, infinities, overflow, and unsupported currency fields.
+- Made table deletion clean every seat even when one payout fails, with failed payouts recorded for manual recovery.
+- Fixed session-handshake timeout cleanup, secure-key wrapper mutation, unknown-card rendering, nullable checkbox defaults, and bot RNG boundary handling.
+- Restored native form validation for table creation, table settings, and top-ups.
+- Added a visible keyboard-accessible seat-actions button while retaining right-click support.
+- Updated documentation, metadata, and regression tests for the current feature set.
+
 ## 1.7.2
 
 - Synchronized the native Foundry window title on every table render, so the header follows pre-flop, flop, turn, river, pause, and hand completion instead of retaining the initial street.

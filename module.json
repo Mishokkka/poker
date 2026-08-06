@@ -2,7 +2,7 @@
   "id": "fbl-poker-table",
   "title": "Forbidden Lands Poker Table",
   "description": "Server-authoritative Texas Hold'em poker tables for Forbidden Lands, with Actor currency integration.",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "authors": [
     {
       "name": "Airborne Islands table"
@@ -10,7 +10,7 @@
   ],
   "compatibility": {
     "minimum": "13",
-    "verified": "14.364"
+    "verified": "13.351"
   },
   "relationships": {
     "systems": [
@@ -43,5 +43,6 @@
   ],
   "license": "LICENSE",
   "readme": "README.md",
-  "socket": true
+  "socket": true,
+  "url": "https://github.com/Mishokkka/poker"
 }

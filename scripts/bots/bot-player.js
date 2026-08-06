@@ -19,7 +19,17 @@ function randomBetween(rng, min, max) {
 }
 
 function integerBetween(rng, min, max) {
-  return Math.floor(randomBetween(rng, min, max + 1));
+  return Math.min(max, Math.floor(randomBetween(rng, min, max + 1)));
+}
+
+function resolvePersonalityAndRng(personalityOrRng, maybeRng) {
+  if (typeof personalityOrRng === "function") {
+    return { personality: BOT_PERSONALITIES.CALM, rng: personalityOrRng };
+  }
+  return {
+    personality: normalizeBotPersonality(personalityOrRng) ?? BOT_PERSONALITIES.CALM,
+    rng: typeof maybeRng === "function" ? maybeRng : Math.random
+  };
 }
 
 function shuffledSample(values, count, rng) {
@@ -220,6 +230,8 @@ function applyPersonality({ decision, personality, state, seat, legal, rng }) {
     return decision;
   }
 
+  if (normalized !== BOT_PERSONALITIES.RECKLESS) return decision;
+
   if (decision.action === ACTIONS.CHECK && legal.canBet && rng() < 0.42) {
     return { action: ACTIONS.BET, amount: raiseTarget(state, legal, rng() < 0.45 ? 0.65 : 1) };
   }
@@ -244,10 +256,7 @@ export function normalizeBotPersonality(value) {
 }
 
 export function botThinkDelay(level, personalityOrRng = BOT_PERSONALITIES.CALM, maybeRng = Math.random) {
-  const personality = typeof personalityOrRng === "function"
-    ? BOT_PERSONALITIES.CALM
-    : (normalizeBotPersonality(personalityOrRng) ?? BOT_PERSONALITIES.CALM);
-  const rng = typeof personalityOrRng === "function" ? personalityOrRng : maybeRng;
+  const { personality, rng } = resolvePersonalityAndRng(personalityOrRng, maybeRng);
   const levelFactor = {
     [BOT_LEVELS.NOVICE]: 1.12,
     [BOT_LEVELS.EXPERIENCED]: 1,
@@ -264,10 +273,7 @@ export function botThinkDelay(level, personalityOrRng = BOT_PERSONALITIES.CALM, 
 
 export function chooseBotAction(engine, seatIndex, level, personalityOrRng = BOT_PERSONALITIES.CALM, maybeRng = Math.random) {
   const normalizedLevel = normalizeBotLevel(level) ?? BOT_LEVELS.NOVICE;
-  const personality = typeof personalityOrRng === "function"
-    ? BOT_PERSONALITIES.CALM
-    : (normalizeBotPersonality(personalityOrRng) ?? BOT_PERSONALITIES.CALM);
-  const rng = typeof personalityOrRng === "function" ? personalityOrRng : maybeRng;
+  const { personality, rng } = resolvePersonalityAndRng(personalityOrRng, maybeRng);
   const state = { ...engine.state, potTotal: engine.potTotal ?? engine.state?.potTotal ?? 0 };
   const seat = state.seats?.[seatIndex];
   const legal = engine.legalActions(seatIndex);

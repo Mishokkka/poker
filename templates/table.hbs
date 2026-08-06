@@ -91,19 +91,22 @@
             </div>
 
             {{#if canManage}}
-              <nav class="fbl-poker-seat-context-menu" data-seat-context-menu>
+              <button type="button" class="fbl-poker-seat-menu-trigger" data-seat-menu-trigger aria-label="{{localize 'FBLPoker.Table.SeatMenu'}}" aria-haspopup="menu" aria-expanded="false">
+                <i class="fa-solid fa-ellipsis-vertical" aria-hidden="true"></i>
+              </button>
+              <nav class="fbl-poker-seat-context-menu" data-seat-context-menu role="menu" aria-label="{{localize 'FBLPoker.Table.SeatMenu'}}">
                 {{#if canToggleCards}}
-                  <button type="button" data-action="toggleCards" data-seat-index="{{index}}" data-revealed="{{cardsRevealed}}"><i class="fa-solid {{#if cardsRevealed}}fa-eye-slash{{else}}fa-eye{{/if}}"></i><span>{{#if cardsRevealed}}{{localize "FBLPoker.Table.HideCards"}}{{else}}{{localize "FBLPoker.Table.ShowCards"}}{{/if}}</span></button>
+                  <button type="button" role="menuitem" data-action="toggleCards" data-seat-index="{{index}}" data-revealed="{{cardsRevealed}}"><i class="fa-solid {{#if cardsRevealed}}fa-eye-slash{{else}}fa-eye{{/if}}"></i><span>{{#if cardsRevealed}}{{localize "FBLPoker.Table.HideCards"}}{{else}}{{localize "FBLPoker.Table.ShowCards"}}{{/if}}</span></button>
                 {{/if}}
                 {{#if canTopUp}}
-                  <button type="button" data-action="openTopUp" data-seat-index="{{index}}"><i class="fa-solid fa-coins"></i><span>{{localize "FBLPoker.TopUp.Title"}}</span></button>
+                  <button type="button" role="menuitem" data-action="openTopUp" data-seat-index="{{index}}"><i class="fa-solid fa-coins"></i><span>{{localize "FBLPoker.TopUp.Title"}}</span></button>
                 {{/if}}
                 {{#if canImmediateManage}}
-                  <button type="button" data-action="toggleSitOut" data-seat-index="{{index}}" data-sitting-out="{{sittingOut}}"><i class="fa-solid {{#if sittingOut}}fa-play{{else}}fa-pause{{/if}}"></i><span>{{#if sittingOut}}{{localize "FBLPoker.Table.SitIn"}}{{else}}{{localize "FBLPoker.Table.SitOut"}}{{/if}}</span></button>
-                  <button type="button" class="danger" data-action="cashOut" data-seat-index="{{index}}"><i class="fa-solid fa-right-from-bracket"></i><span>{{localize "FBLPoker.Table.CashOut"}}</span></button>
+                  <button type="button" role="menuitem" data-action="toggleSitOut" data-seat-index="{{index}}" data-sitting-out="{{sittingOut}}"><i class="fa-solid {{#if sittingOut}}fa-play{{else}}fa-pause{{/if}}"></i><span>{{#if sittingOut}}{{localize "FBLPoker.Table.SitIn"}}{{else}}{{localize "FBLPoker.Table.SitOut"}}{{/if}}</span></button>
+                  <button type="button" role="menuitem" class="danger" data-action="cashOut" data-seat-index="{{index}}"><i class="fa-solid fa-right-from-bracket"></i><span>{{localize "FBLPoker.Table.CashOut"}}</span></button>
                 {{else if canQueue}}
-                  <button type="button" data-action="toggleSitOutAfterHand" data-seat-index="{{index}}"><i class="fa-solid {{#if sitOutAfterHand}}fa-ban{{else}}fa-pause{{/if}}"></i><span>{{#if sitOutAfterHand}}{{localize "FBLPoker.Table.CancelSitOutAfterHand"}}{{else}}{{localize "FBLPoker.Table.SitOutAfterHand"}}{{/if}}</span></button>
-                  <button type="button" class="danger" data-action="toggleLeaveAfterHand" data-seat-index="{{index}}"><i class="fa-solid {{#if leaveAfterHand}}fa-ban{{else}}fa-right-from-bracket{{/if}}"></i><span>{{#if leaveAfterHand}}{{localize "FBLPoker.Table.CancelLeaveAfterHand"}}{{else}}{{localize "FBLPoker.Table.LeaveAfterHand"}}{{/if}}</span></button>
+                  <button type="button" role="menuitem" data-action="toggleSitOutAfterHand" data-seat-index="{{index}}"><i class="fa-solid {{#if sitOutAfterHand}}fa-ban{{else}}fa-pause{{/if}}"></i><span>{{#if sitOutAfterHand}}{{localize "FBLPoker.Table.CancelSitOutAfterHand"}}{{else}}{{localize "FBLPoker.Table.SitOutAfterHand"}}{{/if}}</span></button>
+                  <button type="button" role="menuitem" class="danger" data-action="toggleLeaveAfterHand" data-seat-index="{{index}}"><i class="fa-solid {{#if leaveAfterHand}}fa-ban{{else}}fa-right-from-bracket{{/if}}"></i><span>{{#if leaveAfterHand}}{{localize "FBLPoker.Table.CancelLeaveAfterHand"}}{{else}}{{localize "FBLPoker.Table.LeaveAfterHand"}}{{/if}}</span></button>
                 {{/if}}
               </nav>
             {{/if}}

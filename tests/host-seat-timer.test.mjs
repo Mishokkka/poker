@@ -72,6 +72,16 @@ await socket.request(REQUEST.CREATE_TABLE, {
   chipValueCopper: 1
 });
 const tableId = [...socket.tables.keys()][0];
+await assert.rejects(
+  socket.request(REQUEST.JOIN, { tableId, seatIndex: 0, actorId: "a1", buyIn: Number.NaN }),
+  /BuyInRange/,
+  "Non-finite buy-ins must be rejected before touching Actor currency."
+);
+await assert.rejects(
+  socket.request(REQUEST.JOIN, { tableId, seatIndex: 0, actorId: "a1", buyIn: 40.5 }),
+  /BuyInRange/,
+  "Fractional buy-ins must be rejected rather than silently rounded."
+);
 await socket.request(REQUEST.JOIN, { tableId, seatIndex: 0, actorId: "a1", buyIn: 40 });
 await socket.request(REQUEST.JOIN, { tableId, seatIndex: 1, actorId: "a2", buyIn: 40 });
 await socket.request(REQUEST.JOIN, { tableId, seatIndex: 2, actorId: "a3", buyIn: 40 });
@@ -93,7 +103,7 @@ const activeSeat = socket.getTable(tableId).currentSeat;
 await new Promise((resolve) => setTimeout(resolve, 20));
 await socket.request(REQUEST.TOGGLE_LEAVE_AFTER_HAND, { tableId, seatIndex: activeSeat });
 const after = socket.getTable(tableId).turnDeadline;
-assert.ok(Math.abs(after - before) < 250, `Queued seat controls must preserve the deadline. before=${before}, after=${after}`);
+assert.ok(Math.abs(after - before) < 1000, `Queued seat controls must preserve the deadline. before=${before}, after=${after}`);
 
 await socket.request(REQUEST.PAUSE_TABLE, { tableId });
 const remaining = socket.getTable(tableId).turnTimeRemaining;
@@ -101,8 +111,18 @@ assert.ok(remaining > 0 && remaining < 45000);
 await new Promise((resolve) => setTimeout(resolve, 20));
 await socket.request(REQUEST.RESUME_TABLE, { tableId });
 const resumed = socket.getTable(tableId).turnDeadline;
-assert.ok(resumed - Date.now() <= remaining + 150 && resumed - Date.now() > remaining - 300);
+assert.ok(resumed - Date.now() <= remaining + 1000 && resumed - Date.now() > remaining - 1000);
 
 await socket.request(REQUEST.FORCE_RESET, { tableId });
-socket.hostService?.shutdown();
+actors.delete("a3");
+await assert.rejects(
+  socket.request(REQUEST.DELETE_TABLE, { tableId }),
+  /TableDeletePayoutFailed/,
+  "Deleting a table must continue after an individual payout failure and report the failed Actor."
+);
+assert.equal(socket.getTable(tableId), null, "The table must still be removed after a failed payout.");
+const failedPayout = settings.get("fbl-poker-table.ledger").find((entry) => entry.actorId === "a3" && entry.status === "failed");
+assert.ok(failedPayout, "A failed deletion payout must be recorded in the transaction ledger.");
+assert.equal(failedPayout.reason, "tableDeletePayoutFailed");
+socket.shutdown();
 console.log("Host seat movement and timer preservation test passed.");

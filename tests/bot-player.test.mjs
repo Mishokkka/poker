@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { ACTIONS, BOT_LEVELS, BOT_PERSONALITIES } from "../scripts/constants.js";
+import { ACTIONS, BOT_LEVELS, BOT_PERSONALITIES, TABLE_STATUS } from "../scripts/constants.js";
 import { botThinkDelay, chooseBotAction, normalizeBotLevel, normalizeBotPersonality } from "../scripts/bots/bot-player.js";
 import { createTableState, PokerTableEngine } from "../scripts/engine/table-engine.js";
 
@@ -40,6 +40,7 @@ assert.equal(normalizeBotPersonality("unknown"), null);
 const calmDelay = botThinkDelay(BOT_LEVELS.EXPERIENCED, BOT_PERSONALITIES.CALM, () => 0.5);
 const recklessDelay = botThinkDelay(BOT_LEVELS.EXPERIENCED, BOT_PERSONALITIES.RECKLESS, () => 0.5);
 assert.ok(calmDelay > recklessDelay, "Calm bots should generally take longer than reckless bots.");
+assert.equal(botThinkDelay(BOT_LEVELS.EXPERIENCED, BOT_PERSONALITIES.RECKLESS, () => 1), 2200, "An injected RNG value of 1 must stay inside the inclusive delay range.");
 
 const weak = chooseBotAction(
   mockEngine({ holeCards: ["7s", "2d"], currentBet: 30, callAmount: 30, stack: 70, potTotal: 20 }),
@@ -66,7 +67,10 @@ const checked = chooseBotAction(
   BOT_PERSONALITIES.RECKLESS,
   seeded(77)
 );
-assert.ok([ACTIONS.CHECK, ACTIONS.BET].includes(checked.action));
+assert.ok(
+  [ACTIONS.CHECK, ACTIONS.BET, ACTIONS.RAISE, ACTIONS.ALL_IN].includes(checked.action),
+  `A reckless bot facing no call must choose an aggressive or checking action, received ${checked.action}.`
+);
 
 const table = new PokerTableEngine(createTableState({ id: "bot-table", name: "Bot Table", maxSeats: 3 }));
 table.addSeat(0, {
@@ -113,6 +117,7 @@ for (let index = 0; index < 3; index += 1) {
     botPersonality: personalities[index]
   });
 }
+const startingChips = simulation.state.seats.reduce((total, seat) => total + (seat?.stack ?? 0), 0);
 simulation.startHand();
 const simulationRng = seeded(991);
 let steps = 0;
@@ -124,7 +129,12 @@ while (simulation.isActiveHand && steps < 100) {
   simulation.act(index, decision.action, decision.amount);
   steps += 1;
 }
-assert.ok(steps < 100);
-assert.equal(simulation.state.status, "complete");
+assert.ok(steps < 100, `The bot-only hand did not terminate within the safety limit; steps=${steps}.`);
+assert.equal(simulation.state.status, TABLE_STATUS.COMPLETE);
+assert.equal(
+  simulation.state.seats.reduce((total, seat) => total + (seat?.stack ?? 0), 0),
+  startingChips,
+  "Bot-only hands must conserve all chips."
+);
 
 console.log("Full bot hand simulation passed.");

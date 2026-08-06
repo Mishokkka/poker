@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node tests/import-smoke.mjs && node tests/crypto.test.mjs && node tests/crypto-fallback.test.mjs && node tests/engine.test.mjs && node tests/socket-host-local.test.mjs && node tests/socket-player-sync.test.mjs && node tests/table-header.test.mjs && node tests/sound-service.test.mjs && node tests/table-geometry.test.mjs && node tests/host-seat-timer.test.mjs && node tests/bot-player.test.mjs && node tests/auto-next.test.mjs"
+    "test": "node tests/import-smoke.mjs && node --test \"tests/*.test.mjs\""
   },
-  "version": "1.7.2"
+  "version": "1.7.3"
 }
