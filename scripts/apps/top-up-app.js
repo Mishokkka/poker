@@ -1,7 +1,7 @@
 import { REQUEST } from "../constants.js";
 import { CurrencyAdapter } from "../economy/fbl-currency.js";
 import { getPokerSocket } from "../runtime.js";
-import { notifyError } from "../util.js";
+import { notifyError, parseStrictInteger } from "../util.js";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 const currency = new CurrencyAdapter();
@@ -71,7 +71,7 @@ export class TopUpApp extends HandlebarsApplicationMixin(ApplicationV2) {
     try {
       const form = this.form ?? this.element;
       if (typeof form.reportValidity === "function" && !form.reportValidity()) return;
-      const amount = Number.parseInt(new FormData(form).get("amount"), 10);
+      const amount = parseStrictInteger(new FormData(form).get("amount"), "FBLPoker.Errors.InvalidTopUp");
       await getPokerSocket().request(REQUEST.TOP_UP, {
         tableId: this.tableId,
         seatIndex: this.seatIndex,

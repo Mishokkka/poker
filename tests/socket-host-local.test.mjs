@@ -64,6 +64,14 @@ assert.equal(pokerSocket.tables.size, 1, "The host must receive its own table sn
 assert.equal([...pokerSocket.tables.values()][0].name, "Local Host Test");
 const snapshot = emitted.findLast(({ payload }) => payload.type === REQUEST.SNAPSHOT)?.payload;
 assert.equal(snapshot?.hostUserId, hostUser.id, "Public snapshots must identify the active host that produced them.");
+
+const successor = { id: "aa-successor", active: true, isGM: true };
+users.contents.unshift(successor);
+const emittedBeforeHandoffPublish = emitted.length;
+const retainedTableName = [...pokerSocket.tables.values()][0].name;
+pokerSocket.publishSnapshot([{ id: "stale", name: "Stale Host Snapshot" }]);
+assert.equal(emitted.length, emittedBeforeHandoffPublish, "A retiring host must not broadcast a snapshot after host handoff.");
+assert.equal([...pokerSocket.tables.values()][0].name, retainedTableName, "A retiring host must not apply its stale snapshot locally.");
 } finally {
   await pokerSocket.shutdown();
 }

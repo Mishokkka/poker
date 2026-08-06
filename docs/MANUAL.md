@@ -54,9 +54,9 @@ Unshown folded cards and cards from uncontested pots are never added to public h
 If the host reloads during an active hand, the hand is cancelled. Every seat receives its committed chips back. This is deliberate because the deck and hole cards are never persisted publicly.
 
 
-## Remote HTTP clients
+## Remote clients and Web Crypto
 
-The module uses encrypted private payloads when the browser exposes Web Crypto. A player who joins through a plain HTTP address may not have that API. In that case the module automatically uses a compatibility transport and continues synchronizing the lobby, actions, and private hand. This mode prevents accidental display on the wrong client but is not resistant to raw socket inspection.
+Private poker transport requires Web Crypto. Every participating browser must open Foundry through HTTPS or localhost. If the API is unavailable, the module refuses to initialize rather than sending hole cards, session tokens, action requests, acknowledgements, or private errors as readable socket payloads.
 ## Sound settings
 
 The GM-only speaker icon in the table title bar opens the sound editor. Each poker event has its own path, preview button, and volume slider. Empty or reset paths use the bundled sounds in `assets/sounds`. Volume zero disables the selected event.

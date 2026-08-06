@@ -1,7 +1,7 @@
 import { BOT_LEVELS, BOT_PERSONALITIES, REQUEST } from "../constants.js";
 import { CurrencyAdapter } from "../economy/fbl-currency.js";
 import { getPokerSocket } from "../runtime.js";
-import { notifyError } from "../util.js";
+import { notifyError, parseStrictInteger } from "../util.js";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 const currency = new CurrencyAdapter();
@@ -109,7 +109,7 @@ export class SeatDialogApp extends HandlebarsApplicationMixin(ApplicationV2) {
         });
       } else {
         const actorId = form.querySelector('[name="actorId"]')?.value;
-        const buyIn = Number.parseInt(form.querySelector('[name="buyIn"]')?.value, 10);
+        const buyIn = parseStrictInteger(form.querySelector('[name="buyIn"]')?.value, "FBLPoker.Errors.BuyInRange");
         const botLevel = game.user.isGM ? (form.querySelector('[name="botLevel"]')?.value || null) : null;
         const botPersonality = botLevel ? (form.querySelector('[name="botPersonality"]')?.value || BOT_PERSONALITIES.CALM) : null;
         if (!actorId) throw new Error("FBLPoker.Errors.SelectActor");

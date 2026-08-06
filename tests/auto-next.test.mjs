@@ -52,9 +52,10 @@ globalThis.CONST = { DOCUMENT_OWNERSHIP_LEVELS: { OWNER: 3 } };
 const { PokerSocket } = await import("../scripts/network/socket.js");
 const { ACTIONS, REQUEST, TABLE_STATUS } = await import("../scripts/constants.js");
 const socket = new PokerSocket();
-await socket.initialize();
+try {
+  await socket.initialize();
 
-await socket.request(REQUEST.CREATE_TABLE, {
+  await socket.request(REQUEST.CREATE_TABLE, {
   name: "Automatic",
   maxSeats: 2,
   smallBlind: 1,
@@ -89,5 +90,7 @@ await socket.request(REQUEST.FORCE_RESET, { tableId });
 assert.equal(socket.getTable(tableId).status, TABLE_STATUS.WAITING, "Force reset must return the table to its waiting state.");
 await socket.request(REQUEST.SET_AUTO_NEXT, { tableId, enabled: false });
 assert.equal(socket.getTable(tableId).autoNextHand, false);
-socket.shutdown();
+} finally {
+  await socket.shutdown();
+}
 console.log("Automatic next-hand test passed.");

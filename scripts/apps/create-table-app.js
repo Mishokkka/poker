@@ -1,7 +1,7 @@
 import { DEFAULT_TABLE, REQUEST } from "../constants.js";
 import { normalizeTableConfiguration } from "../engine/table-engine.js";
 import { getPokerSocket } from "../runtime.js";
-import { notifyError } from "../util.js";
+import { notifyError, parseStrictInteger } from "../util.js";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
@@ -39,8 +39,19 @@ export class CreateTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
       if (typeof form.reportValidity === "function" && !form.reportValidity()) return;
       const formData = new FormData(form);
       const data = Object.fromEntries(formData.entries());
-      for (const key of ["maxSeats", "smallBlind", "bigBlind", "ante", "minBuyIn", "maxBuyIn", "actionSeconds", "chipValueCopper", "autoNextHandSeconds"]) {
-        data[key] = Number.parseInt(data[key], 10);
+      const numericFields = {
+        maxSeats: "FBLPoker.Errors.SeatCountRange",
+        smallBlind: "FBLPoker.Errors.BlindOrder",
+        bigBlind: "FBLPoker.Errors.BlindOrder",
+        ante: "FBLPoker.Errors.InvalidAnte",
+        minBuyIn: "FBLPoker.Errors.BuyInOrder",
+        maxBuyIn: "FBLPoker.Errors.BuyInOrder",
+        actionSeconds: "FBLPoker.Errors.ActionTimeRange",
+        chipValueCopper: "FBLPoker.Errors.InvalidChipValue",
+        autoNextHandSeconds: "FBLPoker.Errors.AutoNextTimeRange"
+      };
+      for (const [key, errorKey] of Object.entries(numericFields)) {
+        data[key] = parseStrictInteger(data[key], errorKey);
       }
       data.autoNextHand = formData.has("autoNextHand");
       data.name = String(data.name ?? "").trim();

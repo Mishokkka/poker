@@ -9,7 +9,7 @@ A Foundry VTT module for character-based No-Limit Texas Hold'em using Forbidden 
 - Application V2 UI
 - No external module dependency
 
-## Implemented in 1.7.5
+## Implemented in 1.7.6
 
 - 2–10 seat No-Limit Texas Hold'em cash tables
 - dealer button, small blind, big blind and ante
