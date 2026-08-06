@@ -40,7 +40,7 @@ export class CreateTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
       const formData = new FormData(form);
       const data = Object.fromEntries(formData.entries());
       for (const key of ["maxSeats", "smallBlind", "bigBlind", "ante", "minBuyIn", "maxBuyIn", "actionSeconds", "chipValueCopper", "autoNextHandSeconds"]) {
-        data[key] = Number.parseInt(data[key], 10);
+        data[key] = Number(data[key]);
       }
       data.autoNextHand = formData.has("autoNextHand");
       data.name = String(data.name ?? "").trim();

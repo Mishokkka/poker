@@ -27,6 +27,7 @@ globalThis.game = {
   },
   socket: {
     on: (channel, fn) => socketListeners.set(channel, fn),
+    off: (channel) => socketListeners.delete(channel),
     emit: (channel, payload) => emitted.push({ channel, payload })
   },
   i18n: {
@@ -36,15 +37,16 @@ globalThis.game = {
   modules: { get: () => ({ title: "Poker" }) }
 };
 globalThis.Hooks = { callAll() {} };
-globalThis.ui = { notifications: { error() {} } };
+globalThis.ui = { notifications: { error() {}, warn() {} } };
 globalThis.foundry = { utils: { deepClone: structuredClone } };
 
 const { PokerSocket } = await import("../scripts/network/socket.js");
 const { REQUEST } = await import("../scripts/constants.js");
 
 const pokerSocket = new PokerSocket();
-await pokerSocket.initialize();
-assert.ok(pokerSocket.sessionToken, "The active GM must establish a local host session without socket loopback");
+try {
+  await pokerSocket.initialize();
+  assert.ok(pokerSocket.sessionToken, "The active GM must establish a local host session without socket loopback");
 
 await pokerSocket.request(REQUEST.CREATE_TABLE, {
   name: "Local Host Test",
@@ -61,6 +63,8 @@ await pokerSocket.request(REQUEST.CREATE_TABLE, {
 assert.equal(pokerSocket.tables.size, 1, "The host must receive its own table snapshot locally");
 assert.equal([...pokerSocket.tables.values()][0].name, "Local Host Test");
 assert.ok(emitted.some(({ payload }) => payload.type === REQUEST.SNAPSHOT), "Snapshots should still be sent to remote clients");
-pokerSocket.shutdown();
+} finally {
+  pokerSocket.shutdown();
+}
 
 console.log("Local host socket test passed.");

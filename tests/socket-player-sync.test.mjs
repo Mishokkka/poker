@@ -1,15 +1,7 @@
 import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
 
-Object.defineProperty(globalThis, "crypto", {
-  configurable: true,
-  value: {
-    getRandomValues(array) {
-      for (let index = 0; index < array.length; index += 1) array[index] = (index * 17 + 11) & 0xff;
-      return array;
-    }
-  }
-});
-
+Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto });
 globalThis.btoa ??= (value) => Buffer.from(value, "binary").toString("base64");
 globalThis.atob ??= (value) => Buffer.from(value, "base64").toString("binary");
 
@@ -20,13 +12,16 @@ const users = {
   get: (id) => [gm, player].find((user) => user.id === id) ?? null
 };
 let listener = null;
+let removedListener = null;
 const emitted = [];
 
 globalThis.game = {
   user: player,
   users,
+  settings: { get: () => ({}) },
   socket: {
     on: (_channel, fn) => { listener = fn; },
+    off: (_channel, fn) => { removedListener = fn; },
     emit: (channel, payload) => emitted.push({ channel, payload })
   },
   i18n: {
@@ -40,60 +35,79 @@ globalThis.ui = { notifications: { error() {} } };
 globalThis.foundry = { utils: { deepClone: structuredClone } };
 
 const { PokerSocket } = await import("../scripts/network/socket.js");
+const { SessionCrypto } = await import("../scripts/network/crypto.js");
 const { REQUEST } = await import("../scripts/constants.js");
 
+const hostCrypto = new SessionCrypto();
+await hostCrypto.initialize();
 const socket = new PokerSocket();
-await socket.initialize();
-assert.ok(listener, "The player must register its socket listener even without crypto.subtle");
-assert.ok(emitted.some(({ payload }) => payload.type === REQUEST.HELLO && payload.publicKey.mode === "plain"));
 
-const activeTable = {
-  id: "table-1",
-  name: "Remote Table",
-  handNumber: 1,
-  seats: [{ index: 0, userId: player.id, cardsCount: 2 }]
-};
-await listener({ type: REQUEST.SNAPSHOT, tables: [activeTable] });
-assert.equal(socket.getTable("table-1")?.name, "Remote Table", "Public tables must synchronize before session establishment");
+try {
+  await socket.initialize();
+  assert.ok(listener, "The player must register its socket listener.");
+  const hello = emitted.find(({ payload }) => payload.type === REQUEST.HELLO)?.payload;
+  assert.equal(hello?.publicKey?.mode, "ecdh");
 
-await listener({
-  type: REQUEST.PRIVATE,
-  recipient: player.id,
-  senderPublicKey: { mode: "plain" },
-  encrypted: { plain: { kind: "session", token: "session-player" } }
-});
-assert.equal(socket.sessionToken, "session-player");
+  const activeTable = {
+    id: "table-1",
+    name: "Remote Table",
+    handNumber: 1,
+    seats: [{ index: 0, userId: player.id, cardsCount: 2 }]
+  };
+  await listener({ type: REQUEST.SNAPSHOT, tables: [activeTable] });
+  assert.equal(socket.getTable("table-1")?.name, "Remote Table", "Public tables must synchronize before session establishment.");
 
-await new Promise((resolve) => setTimeout(resolve, 0));
-const stateRequest = emitted.findLast(({ payload }) => payload.type === REQUEST.REQUEST_STATE);
-assert.ok(stateRequest, "The player must request a fresh state after accepting the session");
-await listener({
-  type: REQUEST.PRIVATE,
-  recipient: player.id,
-  senderPublicKey: { mode: "plain" },
-  encrypted: { plain: { kind: "ack", requestId: stateRequest.payload.requestId } }
-});
+  const sessionToken = "session-player";
+  await listener({
+    type: REQUEST.PRIVATE,
+    recipient: player.id,
+    senderPublicKey: hostCrypto.publicKey,
+    encrypted: await hostCrypto.encrypt(hello.publicKey, { kind: "session", token: sessionToken, hostUserId: gm.id })
+  });
+  assert.equal(socket.sessionToken, sessionToken);
 
-await listener({
-  type: REQUEST.PRIVATE,
-  recipient: player.id,
-  senderPublicKey: { mode: "plain" },
-  encrypted: {
-    plain: {
+  const requestDeadline = Date.now() + 2000;
+  let stateEnvelope = null;
+  while (!stateEnvelope && Date.now() < requestDeadline) {
+    stateEnvelope = emitted.findLast(({ payload }) => payload.type === REQUEST.PRIVATE && payload.recipient === gm.id)?.payload ?? null;
+    if (!stateEnvelope) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(stateEnvelope, "The player must send the initial state request through encrypted private transport.");
+  assert.equal(JSON.stringify(stateEnvelope).includes(sessionToken), false, "Session tokens must never appear in readable socket payloads.");
+  const stateRequest = await hostCrypto.decrypt(hello.publicKey, stateEnvelope.encrypted);
+  assert.equal(stateRequest.kind, "request");
+  assert.equal(stateRequest.type, REQUEST.REQUEST_STATE);
+  assert.equal(stateRequest.token, sessionToken);
+
+  await listener({
+    type: REQUEST.PRIVATE,
+    recipient: player.id,
+    senderPublicKey: hostCrypto.publicKey,
+    encrypted: await hostCrypto.encrypt(hello.publicKey, { kind: "ack", requestId: stateRequest.requestId })
+  });
+
+  await listener({
+    type: REQUEST.PRIVATE,
+    recipient: player.id,
+    senderPublicKey: hostCrypto.publicKey,
+    encrypted: await hostCrypto.encrypt(hello.publicKey, {
       kind: "holeCards",
       tableId: "table-1",
       handNumber: 1,
       seatIndex: 0,
       cards: ["As", "Ts"]
-    }
-  }
-});
-assert.deepEqual(socket.getPrivateHand("table-1", 1, 0), ["As", "Ts"]);
+    })
+  });
+  assert.deepEqual(socket.getPrivateHand("table-1", 1, 0), ["As", "Ts"]);
 
-await listener({
-  type: REQUEST.SNAPSHOT,
-  tables: [{ ...activeTable, seats: [{ ...activeTable.seats[0], cardsCount: 0 }] }]
-});
-assert.deepEqual(socket.getPrivateHand("table-1", 1, 0), [], "Canceled hands must clear cached private cards");
+  await listener({
+    type: REQUEST.SNAPSHOT,
+    tables: [{ ...activeTable, seats: [{ ...activeTable.seats[0], cardsCount: 0 }] }]
+  });
+  assert.deepEqual(socket.getPrivateHand("table-1", 1, 0), [], "Canceled hands must clear cached private cards.");
+} finally {
+  socket.shutdown();
+}
 
-console.log("Remote player synchronization test passed.");
+assert.equal(removedListener, listener, "Shutdown must remove the registered socket listener.");
+console.log("Encrypted remote player synchronization test passed.");

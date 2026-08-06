@@ -9,26 +9,25 @@ function base64ToBytes(value) {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
+function privateTransportError(cause = null) {
+  const error = new Error("FBLPoker.Errors.PrivateTransportUnavailable");
+  if (cause) error.cause = cause;
+  return error;
+}
+
 /**
- * Private poker payloads use ECDH/AES-GCM whenever Web Crypto is available.
- * Foundry is commonly opened by remote players over plain HTTP, where
- * crypto.subtle is unavailable. In that environment the transport falls back
- * to recipient-targeted plain payloads instead of preventing the module from
- * connecting at all.
+ * Private poker payloads require ECDH/AES-GCM. The transport deliberately
+ * fails closed when Web Crypto is unavailable because Foundry module socket
+ * payloads are broadcast to every connected client before recipient checks.
  */
 export class SessionCrypto {
   #keyPair = null;
-  #publicJwk = { mode: "plain" };
+  #publicJwk = null;
   #secure = false;
 
   async initialize() {
     const subtle = globalThis.crypto?.subtle;
-    if (!subtle) {
-      console.warn("FBL Poker | Web Crypto is unavailable; using HTTP compatibility transport for private payloads.");
-      this.#secure = false;
-      this.#publicJwk = { mode: "plain" };
-      return;
-    }
+    if (!subtle) throw privateTransportError();
 
     try {
       this.#keyPair = await subtle.generateKey(
@@ -40,10 +39,10 @@ export class SessionCrypto {
       this.#publicJwk = { mode: "ecdh", jwk };
       this.#secure = true;
     } catch (error) {
-      console.warn("FBL Poker | Web Crypto is unavailable; using compatibility transport.", error);
       this.#keyPair = null;
-      this.#publicJwk = { mode: "plain" };
+      this.#publicJwk = null;
       this.#secure = false;
+      throw privateTransportError(error);
     }
   }
 
@@ -55,45 +54,55 @@ export class SessionCrypto {
     return this.#secure;
   }
 
-  async #derive(peerJwk, usage) {
-    if (!this.#secure || !this.#keyPair || peerJwk?.mode === "plain") return null;
+  async #derive(peerKeyEnvelope, usage) {
     const subtle = globalThis.crypto?.subtle;
-    if (!subtle) return null;
-    const publicJwk = peerJwk?.jwk ?? peerJwk;
-    const peerKey = await subtle.importKey(
-      "jwk",
-      publicJwk,
-      { name: "ECDH", namedCurve: "P-256" },
-      false,
-      []
-    );
-    return subtle.deriveKey(
-      { name: "ECDH", public: peerKey },
-      this.#keyPair.privateKey,
-      { name: "AES-GCM", length: 256 },
-      false,
-      [usage]
-    );
+    if (!this.#secure || !this.#keyPair || !subtle) throw privateTransportError();
+    if (peerKeyEnvelope?.mode !== "ecdh" || !peerKeyEnvelope.jwk || typeof peerKeyEnvelope.jwk !== "object") {
+      throw privateTransportError();
+    }
+
+    try {
+      const peerKey = await subtle.importKey(
+        "jwk",
+        peerKeyEnvelope.jwk,
+        { name: "ECDH", namedCurve: "P-256" },
+        false,
+        []
+      );
+      return await subtle.deriveKey(
+        { name: "ECDH", public: peerKey },
+        this.#keyPair.privateKey,
+        { name: "AES-GCM", length: 256 },
+        false,
+        [usage]
+      );
+    } catch (error) {
+      throw privateTransportError(error);
+    }
   }
 
-  async encrypt(peerJwk, value) {
-    const key = await this.#derive(peerJwk, "encrypt");
-    if (!key) return { plain: value };
+  async encrypt(peerKeyEnvelope, value) {
+    const key = await this.#derive(peerKeyEnvelope, "encrypt");
     const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
     const encoded = new TextEncoder().encode(JSON.stringify(value));
     const ciphertext = new Uint8Array(await globalThis.crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded));
     return { iv: bytesToBase64(iv), ciphertext: bytesToBase64(ciphertext) };
   }
 
-  async decrypt(peerJwk, payload) {
-    if (payload && Object.prototype.hasOwnProperty.call(payload, "plain")) return payload.plain;
-    const key = await this.#derive(peerJwk, "decrypt");
-    if (!key) throw new Error("FBLPoker.Errors.PrivateTransportUnavailable");
-    const decoded = await globalThis.crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: base64ToBytes(payload.iv) },
-      key,
-      base64ToBytes(payload.ciphertext)
-    );
-    return JSON.parse(new TextDecoder().decode(decoded));
+  async decrypt(peerKeyEnvelope, payload) {
+    if (!payload || typeof payload.iv !== "string" || typeof payload.ciphertext !== "string") {
+      throw privateTransportError();
+    }
+    const key = await this.#derive(peerKeyEnvelope, "decrypt");
+    try {
+      const decoded = await globalThis.crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: base64ToBytes(payload.iv) },
+        key,
+        base64ToBytes(payload.ciphertext)
+      );
+      return JSON.parse(new TextDecoder().decode(decoded));
+    } catch (error) {
+      throw privateTransportError(error);
+    }
   }
 }

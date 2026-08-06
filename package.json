@@ -5,5 +5,5 @@
   "scripts": {
     "test": "node tests/import-smoke.mjs && node --test \"tests/*.test.mjs\""
   },
-  "version": "1.7.3"
+  "version": "1.7.4"
 }

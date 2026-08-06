@@ -716,7 +716,7 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
     try {
       const action = target.dataset.actionType;
       const amount = action === ACTIONS.BET || action === ACTIONS.RAISE
-        ? Number.parseInt(this.element.querySelector('[name="raiseAmount"]')?.value, 10)
+        ? Number(this.element.querySelector('[name="raiseAmount"]')?.value)
         : null;
       const table = getPokerSocket().getTable(this.tableId);
       await getPokerSocket().request(REQUEST.ACTION, {

@@ -4,12 +4,12 @@ A Foundry VTT module for character-based No-Limit Texas Hold'em using Forbidden 
 
 ## Target environment
 
-- Foundry VTT 13.351 and 14.x
-- Forbidden Lands 13.0.5 and 14.x
+- Foundry VTT 13.351
+- Forbidden Lands 13.0.5
 - Application V2 UI
 - No external module dependency
 
-## Implemented in 1.7.3
+## Implemented in 1.7.4
 
 - 2–10 seat No-Limit Texas Hold'em cash tables
 - dealer button, small blind, big blind and ante
@@ -19,7 +19,6 @@ A Foundry VTT module for character-based No-Limit Texas Hold'em using Forbidden 
 - automatic flop, turn, river and showdown
 - configurable automatic continuation to the next hand
 - encrypted delivery of hole cards using Web Crypto ECDH + AES-GCM on secure browser contexts
-- automatic compatibility transport for remote players connected over plain HTTP
 - active-GM authoritative game engine
 - action timer with automatic check or fold
 - GM pause and resume during an active hand
@@ -75,7 +74,7 @@ Hole cards and the shuffled deck are not written to world settings. If the activ
 
 ## Security boundary
 
-The module prevents ordinary accidental disclosure of hole cards and validates actions on the active GM client. When every client has Web Crypto, private payloads use ephemeral ECDH and AES-GCM. Browsers opened through plain HTTP may not expose Web Crypto; those clients use recipient-targeted compatibility payloads so the game remains playable. Other connected users do not display those payloads, but a hostile user inspecting the socket could read them.
+The module prevents ordinary accidental disclosure of hole cards and validates actions on the active GM client. Private payloads require Web Crypto and use ephemeral ECDH with AES-GCM. Foundry must be opened through HTTPS or localhost on every participating browser. If secure private transport is unavailable, the module refuses to initialize rather than broadcasting readable hole cards or session tokens.
 
 Foundry module code runs on trusted clients, so this is not a hostile-client anti-cheat system and must not be used for real-money gambling.
 

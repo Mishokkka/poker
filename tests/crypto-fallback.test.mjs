@@ -14,15 +14,14 @@ globalThis.btoa ??= (value) => Buffer.from(value, "binary").toString("base64");
 globalThis.atob ??= (value) => Buffer.from(value, "base64").toString("binary");
 
 const { SessionCrypto } = await import("../scripts/network/crypto.js");
-const sender = new SessionCrypto();
-const receiver = new SessionCrypto();
-await sender.initialize();
-await receiver.initialize();
+const session = new SessionCrypto();
 
-assert.equal(sender.secure, false);
-assert.equal(sender.publicKey.mode, "plain");
-const payload = await sender.encrypt(receiver.publicKey, { kind: "session", token: "test" });
-assert.deepEqual(payload, { plain: { kind: "session", token: "test" } });
-assert.deepEqual(await receiver.decrypt(sender.publicKey, payload), { kind: "session", token: "test" });
+await assert.rejects(
+  session.initialize(),
+  /PrivateTransportUnavailable/,
+  "Private poker transport must fail closed when Web Crypto is unavailable."
+);
+assert.equal(session.secure, false);
+assert.equal(session.publicKey, null);
 
-console.log("HTTP compatibility transport test passed.");
+console.log("Fail-closed private transport test passed.");
