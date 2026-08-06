@@ -1,0 +1,31 @@
+<section class="fbl-poker-sound-settings-body">
+  <header class="fbl-poker-form-intro">
+    <span class="fbl-poker-toolbar-emblem"><i class="fa-solid fa-volume-high"></i></span>
+    <div>
+      <h2>{{localize "FBLPoker.SoundSettings.Heading"}}</h2>
+      <p>{{localize "FBLPoker.SoundSettings.Subtitle"}}</p>
+    </div>
+  </header>
+
+  <div class="fbl-poker-sound-list">
+    {{#each sounds}}
+      <article class="fbl-poker-sound-row">
+        <div class="fbl-poker-sound-row-heading">
+          <strong>{{labelText}}</strong>
+          <output data-volume-output="{{id}}">{{volumePercent}}%</output>
+        </div>
+        <div class="fbl-poker-sound-path">
+          <input type="text" name="{{id}}.path" value="{{path}}" autocomplete="off">
+          <button type="button" data-action="browseSound" data-sound-id="{{id}}" title="{{localize 'FBLPoker.SoundSettings.Browse'}}"><i class="fa-solid fa-folder-open"></i></button>
+          <button type="button" data-action="previewSound" data-sound-id="{{id}}" title="{{localize 'FBLPoker.SoundSettings.Preview'}}"><i class="fa-solid fa-play"></i></button>
+        </div>
+        <input type="range" name="{{id}}.volume" data-sound-volume="{{id}}" min="0" max="1" step="0.01" value="{{volume}}">
+      </article>
+    {{/each}}
+  </div>
+
+  <footer class="fbl-poker-sound-footer">
+    <button type="button" data-action="resetDefaults"><i class="fa-solid fa-arrow-rotate-left"></i> {{localize "FBLPoker.SoundSettings.Reset"}}</button>
+    <button type="button" class="fbl-poker-primary" data-action="saveSounds"><i class="fa-solid fa-floppy-disk"></i> {{localize "FBLPoker.SoundSettings.Save"}}</button>
+  </footer>
+</section>
