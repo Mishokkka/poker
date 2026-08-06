@@ -7,15 +7,15 @@ const PATHS = Object.freeze({
   copper: "system.currency.copper.value"
 });
 
-function finiteNonNegativeInteger(value, fallback = 0) {
+function nonNegativeCurrencyInteger(value) {
   const number = Number(value);
-  if (!Number.isFinite(number)) return fallback;
-  return Math.max(0, Math.trunc(number));
+  if (!Number.isSafeInteger(number) || number < 0) throw new Error("FBLPoker.Errors.InvalidCurrencyChange");
+  return number;
 }
 
 function positiveRate(value, fallback) {
-  const number = Math.trunc(Number(value));
-  return Number.isFinite(number) && number > 0 ? number : fallback;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : fallback;
 }
 
 export class CurrencyAdapter {
@@ -34,16 +34,16 @@ export class CurrencyAdapter {
   balance(actor) {
     if (!this.supports(actor)) throw new Error("FBLPoker.Errors.UnsupportedCurrency");
     const rates = this.rates;
-    const gold = finiteNonNegativeInteger(getProperty(actor, PATHS.gold));
-    const silver = finiteNonNegativeInteger(getProperty(actor, PATHS.silver));
-    const copper = finiteNonNegativeInteger(getProperty(actor, PATHS.copper));
+    const gold = nonNegativeCurrencyInteger(getProperty(actor, PATHS.gold));
+    const silver = nonNegativeCurrencyInteger(getProperty(actor, PATHS.silver));
+    const copper = nonNegativeCurrencyInteger(getProperty(actor, PATHS.copper));
     const totalCopper = (gold * rates.gold) + (silver * rates.silver) + copper;
     if (!Number.isSafeInteger(totalCopper)) throw new Error("FBLPoker.Errors.InvalidCurrencyChange");
     return { gold, silver, copper, totalCopper };
   }
 
   denominations(totalCopper) {
-    const total = Math.trunc(Number(totalCopper));
+    const total = Number(totalCopper);
     if (!Number.isSafeInteger(total) || total < 0) throw new Error("FBLPoker.Errors.InvalidCurrencyChange");
     const rates = this.rates;
     let remaining = total;

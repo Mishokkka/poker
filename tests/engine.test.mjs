@@ -17,6 +17,8 @@ assert.deepEqual(cardDisplay("Tx"), { rank: "10", suit: "x", symbol: "?", red: f
 
 const nullableConfig = normalizeTableConfiguration({ name: "Nullable", autoNextHand: null }, { ...createTableState({ name: "Base" }), autoNextHand: true });
 assert.equal(nullableConfig.autoNextHand, true, "Null checkbox values must preserve the configured fallback.");
+assert.throws(() => normalizeTableConfiguration({ name: "Fractional", maxSeats: "4.5" }), /SeatCountRange/);
+assert.throws(() => normalizeTableConfiguration({ name: "Malformed", bigBlind: "10chips" }), /BlindOrder/);
 
 const legacy = migrateTableState({
   id: "legacy",
@@ -35,6 +37,9 @@ assert.equal(legacy.schemaVersion, SCHEMA_VERSION);
 assert.equal(legacy.autoNextHand, false);
 assert.deepEqual(legacy.handHistory, []);
 assert.throws(() => migrateTableState({ ...legacy, schemaVersion: SCHEMA_VERSION + 1 }), /UnsupportedSchema/);
+const fractionalStoredState = createTableState({ id: "fractional-state", name: "Fractional Stored", maxSeats: 2 });
+fractionalStoredState.seats[0] = { userId: "u", actorId: "a", actorName: "A", stack: 10.5 };
+assert.throws(() => new PokerTableEngine(fractionalStoredState), /InvalidTableState/);
 
 
 const pots = buildSidePots([
@@ -91,6 +96,7 @@ assert.equal(hu.currentSeat, hu.dealerIndex);
 
 // A non-all-in raise below the legal minimum is rejected.
 assert.throws(() => headsUp.act(hu.currentSeat, "raise", 3), /BelowMinimumRaise/);
+assert.throws(() => headsUp.act(hu.currentSeat, "raise", 4.5), /InvalidBet/);
 
 console.log("Extended rule tests passed.");
 
@@ -106,6 +112,7 @@ assert.throws(() => adminEngine.updateConfiguration({ ...adminEngine.publicState
 adminEngine.addChips(0, 25);
 assert.equal(adminEngine.publicState().seats[0].stack, 75);
 assert.throws(() => adminEngine.addChips(0, 200), /TopUpLimit/);
+assert.throws(() => adminEngine.addChips(0, 1.5), /InvalidTopUp/);
 
 // Pause blocks actions without changing the current actor or street.
 const pauseState = createTableState({ id: "pause", name: "Pause", maxSeats: 2, smallBlind: 1, bigBlind: 2, minBuyIn: 20, maxBuyIn: 100 });

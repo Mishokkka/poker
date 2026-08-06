@@ -16,8 +16,23 @@ function canAct(seat) {
 }
 
 function integer(value, fallback) {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : fallback;
+}
+
+function configuredInteger(configuration, key, fallback, errorKey) {
+  const value = configuration[key];
+  if (value === undefined || value === null) return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new Error(errorKey);
+  return parsed;
+}
+
+function storedNonNegativeInteger(value, fallback = 0) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error("FBLPoker.Errors.InvalidTableState");
+  return parsed;
 }
 
 function boolean(value, fallback = false) {
@@ -33,16 +48,16 @@ export function normalizeTableConfiguration(configuration = {}, base = DEFAULT_T
   const name = String(configuration.name ?? fallbackName).trim().slice(0, 80);
   if (!name) throw new Error("FBLPoker.Errors.TableNameRequired");
 
-  const maxSeats = integer(configuration.maxSeats, base.maxSeats ?? DEFAULT_TABLE.maxSeats);
-  const smallBlind = integer(configuration.smallBlind, base.smallBlind ?? DEFAULT_TABLE.smallBlind);
-  const bigBlind = integer(configuration.bigBlind, base.bigBlind ?? DEFAULT_TABLE.bigBlind);
-  const ante = integer(configuration.ante, base.ante ?? DEFAULT_TABLE.ante);
-  const minBuyIn = integer(configuration.minBuyIn, base.minBuyIn ?? DEFAULT_TABLE.minBuyIn);
-  const maxBuyIn = integer(configuration.maxBuyIn, base.maxBuyIn ?? DEFAULT_TABLE.maxBuyIn);
-  const actionSeconds = integer(configuration.actionSeconds, base.actionSeconds ?? DEFAULT_TABLE.actionSeconds);
-  const chipValueCopper = integer(configuration.chipValueCopper, base.chipValueCopper ?? DEFAULT_TABLE.chipValueCopper);
+  const maxSeats = configuredInteger(configuration, "maxSeats", base.maxSeats ?? DEFAULT_TABLE.maxSeats, "FBLPoker.Errors.SeatCountRange");
+  const smallBlind = configuredInteger(configuration, "smallBlind", base.smallBlind ?? DEFAULT_TABLE.smallBlind, "FBLPoker.Errors.BlindOrder");
+  const bigBlind = configuredInteger(configuration, "bigBlind", base.bigBlind ?? DEFAULT_TABLE.bigBlind, "FBLPoker.Errors.BlindOrder");
+  const ante = configuredInteger(configuration, "ante", base.ante ?? DEFAULT_TABLE.ante, "FBLPoker.Errors.InvalidAnte");
+  const minBuyIn = configuredInteger(configuration, "minBuyIn", base.minBuyIn ?? DEFAULT_TABLE.minBuyIn, "FBLPoker.Errors.BuyInOrder");
+  const maxBuyIn = configuredInteger(configuration, "maxBuyIn", base.maxBuyIn ?? DEFAULT_TABLE.maxBuyIn, "FBLPoker.Errors.BuyInOrder");
+  const actionSeconds = configuredInteger(configuration, "actionSeconds", base.actionSeconds ?? DEFAULT_TABLE.actionSeconds, "FBLPoker.Errors.ActionTimeRange");
+  const chipValueCopper = configuredInteger(configuration, "chipValueCopper", base.chipValueCopper ?? DEFAULT_TABLE.chipValueCopper, "FBLPoker.Errors.InvalidChipValue");
   const autoNextHand = boolean(configuration.autoNextHand, base.autoNextHand ?? DEFAULT_TABLE.autoNextHand);
-  const autoNextHandSeconds = integer(configuration.autoNextHandSeconds, base.autoNextHandSeconds ?? DEFAULT_TABLE.autoNextHandSeconds);
+  const autoNextHandSeconds = configuredInteger(configuration, "autoNextHandSeconds", base.autoNextHandSeconds ?? DEFAULT_TABLE.autoNextHandSeconds, "FBLPoker.Errors.AutoNextTimeRange");
 
   if (maxSeats < 2 || maxSeats > 10) throw new Error("FBLPoker.Errors.SeatCountRange");
   if (bigBlind < 1 || smallBlind < 0 || smallBlind > bigBlind) throw new Error("FBLPoker.Errors.BlindOrder");
@@ -78,17 +93,17 @@ function normalizeSeat(seat, index) {
     isBot: Boolean(seat.isBot),
     botLevel: Object.values(BOT_LEVELS).includes(seat.botLevel) ? seat.botLevel : null,
     botPersonality: Object.values(BOT_PERSONALITIES).includes(seat.botPersonality) ? seat.botPersonality : BOT_PERSONALITIES.CALM,
-    stack: Math.max(0, Number(seat.stack) || 0),
+    stack: storedNonNegativeInteger(seat.stack),
     sittingOut: Boolean(seat.sittingOut),
     sitOutAfterHand: Boolean(seat.sitOutAfterHand),
     leaveAfterHand: Boolean(seat.leaveAfterHand),
     inHand: Boolean(seat.inHand),
     folded: Boolean(seat.folded),
     allIn: Boolean(seat.allIn),
-    streetBet: Math.max(0, Number(seat.streetBet) || 0),
-    handCommitted: Math.max(0, Number(seat.handCommitted) || 0),
+    streetBet: storedNonNegativeInteger(seat.streetBet),
+    handCommitted: storedNonNegativeInteger(seat.handCommitted),
     lastAction: seat.lastAction ?? null,
-    cardsCount: Math.max(0, Number(seat.cardsCount) || 0),
+    cardsCount: storedNonNegativeInteger(seat.cardsCount),
     revealedCards: Array.isArray(seat.revealedCards) ? [...seat.revealedCards] : []
   };
 }
@@ -277,8 +292,8 @@ export class PokerTableEngine {
   addChips(index, amount) {
     if (this.isActiveHand) throw new Error("FBLPoker.Errors.HandInProgress");
     const seat = this.#seat(index);
-    const chips = Number.parseInt(amount, 10);
-    if (!Number.isFinite(chips) || chips < 1) throw new Error("FBLPoker.Errors.InvalidTopUp");
+    const chips = Number(amount);
+    if (!Number.isSafeInteger(chips) || chips < 1) throw new Error("FBLPoker.Errors.InvalidTopUp");
     if ((seat.stack + chips) > this.state.maxBuyIn) throw new Error("FBLPoker.Errors.TopUpLimit");
     seat.stack += chips;
     this.#log("topUp", index, chips);
@@ -533,8 +548,8 @@ export class PokerTableEngine {
       }
       case ACTIONS.BET:
       case ACTIONS.RAISE: {
-        const target = Number.parseInt(amount, 10);
-        if (!Number.isFinite(target)) throw new Error("FBLPoker.Errors.InvalidBet");
+        const target = Number(amount);
+        if (!Number.isSafeInteger(target)) throw new Error("FBLPoker.Errors.InvalidBet");
         this.#raiseTo(index, target, previousActed, false);
         break;
       }

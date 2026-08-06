@@ -228,9 +228,10 @@
       "InitializationFailed": "The poker module could not initialize. Reload Foundry and check the console for details.",
       "InvalidTableState": "Stored poker table data is invalid.",
       "UnsupportedSchema": "This world contains poker table data from a newer module version.",
-      "TableDeletePayoutFailed": "The table was deleted, but chips could not be returned to: {actors}. The failed payouts were recorded in the transaction ledger.",
+      "TableDeletePayoutFailed": "The table was retained because chips could not be returned to: {actors}. Successful payouts were completed, failed payouts were recorded, and deletion can be retried after fixing the affected Actors.",
       "InvalidCurrencyChange": "The requested currency change is invalid.",
-      "PrivateTransportUnavailable": "Private poker data could not be decrypted on this client."
+      "PrivateTransportUnavailable": "Secure poker transport is unavailable. Open Foundry through HTTPS or localhost and reload.",
+      "StoredTablesRejected": "Skipped {count} stored poker table(s) because their data is invalid or from a newer module version. The original data was preserved."
     },
     "CashOut": {
       "Title": "Leave Table",

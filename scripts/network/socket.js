@@ -4,9 +4,17 @@ import { migrateTableState, PokerTableEngine } from "../engine/table-engine.js";
 import { SessionCrypto } from "./crypto.js";
 import { activeHost, isHostClient, localize, randomId } from "../util.js";
 
+function sameEcdhKey(left, right) {
+  return left?.mode === "ecdh"
+    && right?.mode === "ecdh"
+    && left.jwk?.x === right.jwk?.x
+    && left.jwk?.y === right.jwk?.y;
+}
+
 export class PokerSocket {
-  constructor() {
+  constructor({ hostServiceFactory = (socket) => new PokerHostService(socket) } = {}) {
     this.crypto = new SessionCrypto();
+    this.hostServiceFactory = hostServiceFactory;
     this.hostService = null;
     this.tables = new Map();
     this.privateHands = new Map();
@@ -15,13 +23,18 @@ export class PokerSocket {
     this.sessionPromise = null;
     this.pending = new Map();
     this.hostInitPromise = null;
+    this.initializingHostService = null;
+    this.hostGeneration = 0;
+    this.closed = false;
     this.hostId = null;
+    this.hostPublicKey = null;
     this.helloTimer = null;
     this.boundHandler = (payload) => this.#onMessage(payload);
     this.#resetSessionPromise();
   }
 
   async initialize() {
+    this.closed = false;
     game.socket.on(SOCKET_NAME, this.boundHandler);
     try {
       this.#bootstrapFromStoredTables();
@@ -34,17 +47,24 @@ export class PokerSocket {
   }
 
   shutdown() {
+    this.closed = true;
+    this.hostGeneration += 1;
     clearInterval(this.helloTimer);
     this.helloTimer = null;
+    this.initializingHostService?.shutdown();
+    this.initializingHostService = null;
     this.hostService?.shutdown();
     this.hostService = null;
     this.hostInitPromise = null;
+    this.sessionToken = null;
+    this.hostPublicKey = null;
+    this.#resetSessionPromise();
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout);
       pending.reject(new Error(localize("FBLPoker.Errors.NotReady")));
     }
     this.pending.clear();
-    game?.socket?.off?.(SOCKET_NAME, this.boundHandler);
+    globalThis.game?.socket?.off?.(SOCKET_NAME, this.boundHandler);
   }
 
   async refreshHostRole() {
@@ -54,6 +74,7 @@ export class PokerSocket {
     if (hostChanged) {
       this.hostId = nextHostId;
       this.sessionToken = null;
+      this.hostPublicKey = null;
       clearInterval(this.helloTimer);
       this.helloTimer = null;
       this.#resetSessionPromise();
@@ -64,27 +85,45 @@ export class PokerSocket {
       this.pending.clear();
     }
 
+    if (this.closed) return;
+
     if (!isHostClient()) {
+      this.hostGeneration += 1;
+      this.initializingHostService?.shutdown();
+      this.initializingHostService = null;
       this.hostService?.shutdown();
       this.hostService = null;
       this.hostInitPromise = null;
     } else if (!this.hostService) {
       if (!this.hostInitPromise) {
-        this.hostInitPromise = (async () => {
-          const service = new PokerHostService(this);
+        const generation = ++this.hostGeneration;
+        const service = this.hostServiceFactory(this);
+        this.initializingHostService = service;
+        const initialization = (async () => {
           try {
             await service.initialize();
+            if (this.closed || generation !== this.hostGeneration || !isHostClient()) {
+              service.shutdown();
+              return;
+            }
             this.hostService = service;
           } catch (error) {
             service.shutdown();
+            if (this.closed || generation !== this.hostGeneration || !isHostClient()) return;
             throw error;
           }
-        })().finally(() => { this.hostInitPromise = null; });
+        })();
+        this.hostInitPromise = initialization;
+        const cleanup = () => {
+          if (this.hostInitPromise === initialization) this.hostInitPromise = null;
+          if (this.initializingHostService === service) this.initializingHostService = null;
+        };
+        initialization.then(cleanup, cleanup);
       }
       await this.hostInitPromise;
     }
 
-    if (!nextHostId) return;
+    if (this.closed || !nextHostId || activeHost()?.id !== nextHostId) return;
 
     if (isHostClient() && this.hostService) {
       this.#establishLocalHostSession();
@@ -96,22 +135,27 @@ export class PokerSocket {
 
 
   #bootstrapFromStoredTables() {
-    try {
-      if (!game?.settings?.get) return;
-      const stored = game.settings.get(MODULE_ID, "tables");
-      if (!stored || typeof stored !== "object") return;
-      const worldSchemaVersion = Number(game.settings.get(MODULE_ID, "schemaVersion")) || SCHEMA_VERSION;
-      const tables = Object.values(stored)
-        .filter((table) => table && typeof table === "object")
-        .map((table) => new PokerTableEngine(migrateTableState(table, worldSchemaVersion)).publicState());
-      if (!tables.length) return;
-      this.#applySnapshot({ tables });
-    } catch (error) {
-      console.warn("FBL Poker | Failed to bootstrap tables from world settings", error);
+    if (!game?.settings?.get) return;
+    const stored = game.settings.get(MODULE_ID, "tables");
+    if (!stored || typeof stored !== "object" || Array.isArray(stored)) return;
+    const worldSchemaVersion = Number(game.settings.get(MODULE_ID, "schemaVersion")) || SCHEMA_VERSION;
+    const tables = [];
+    for (const [id, table] of Object.entries(stored)) {
+      if (!table || typeof table !== "object" || Array.isArray(table)) {
+        console.error(`FBL Poker | Rejected stored table ${id}: invalid table state`);
+        continue;
+      }
+      try {
+        tables.push(new PokerTableEngine(migrateTableState(table, worldSchemaVersion)).publicState());
+      } catch (error) {
+        console.error(`FBL Poker | Rejected stored table ${id} during client bootstrap`, error);
+      }
     }
+    if (tables.length) this.#applySnapshot({ tables });
   }
 
   hello() {
+    if (!this.crypto.secure) return;
     const hostUserId = activeHost()?.id ?? null;
     if (!hostUserId) return;
     this.broadcast({
@@ -146,6 +190,7 @@ export class PokerSocket {
   }
 
   async request(type, data = {}) {
+    if (!this.crypto.secure) throw new Error(localize("FBLPoker.Errors.PrivateTransportUnavailable"));
     if (!activeHost()) throw new Error(localize("FBLPoker.Errors.NoActiveGM"));
 
     if (isHostClient()) {
@@ -185,8 +230,35 @@ export class PokerSocket {
       this.pending.set(requestId, { resolve, reject, timeout });
     });
 
-    this.broadcast({ type, data, userId: game.user.id, token: this.sessionToken, requestId });
-    return result;
+    if (!this.hostPublicKey || this.hostPublicKey.mode !== "ecdh") {
+      const pendingRequest = this.pending.get(requestId);
+      if (pendingRequest) clearTimeout(pendingRequest.timeout);
+      this.pending.delete(requestId);
+      throw new Error(localize("FBLPoker.Errors.PrivateTransportUnavailable"));
+    }
+
+    try {
+      const encrypted = await this.crypto.encrypt(this.hostPublicKey, {
+        kind: "request",
+        type,
+        data,
+        userId: game.user.id,
+        token: this.sessionToken,
+        requestId
+      });
+      this.broadcast({
+        type: REQUEST.PRIVATE,
+        recipient: this.hostId,
+        senderPublicKey: this.crypto.publicKey,
+        encrypted
+      });
+      return result;
+    } catch (error) {
+      const pendingRequest = this.pending.get(requestId);
+      if (pendingRequest) clearTimeout(pendingRequest.timeout);
+      this.pending.delete(requestId);
+      throw error;
+    }
   }
 
   getTable(tableId) {
@@ -209,6 +281,9 @@ export class PokerSocket {
 
     const session = this.hostService?.sessions.get(userId);
     if (!session) return;
+    if (!this.crypto.secure || session.publicKey?.mode !== "ecdh") {
+      throw new Error("FBLPoker.Errors.PrivateTransportUnavailable");
+    }
     const encrypted = await this.crypto.encrypt(session.publicKey, data);
     this.broadcast({
       type: REQUEST.PRIVATE,
@@ -266,13 +341,36 @@ export class PokerSocket {
     Hooks.callAll("fblPokerStateUpdated", this.tables);
   }
 
-  async #handlePrivateData(data) {
+  async #handlePrivateData(data, senderPublicKey = null) {
     if (!data || typeof data !== "object") return;
 
     if (data.kind === "session") {
+      if (senderPublicKey?.mode !== "ecdh") throw new Error(localize("FBLPoker.Errors.PrivateTransportUnavailable"));
+      if (data.hostUserId !== activeHost()?.id || data.hostUserId !== this.hostId) return;
+      this.hostPublicKey = senderPublicKey;
       this.#acceptSession(data.token);
       this.request(REQUEST.REQUEST_STATE).catch((error) => console.error("FBL Poker | Initial state request failed", error));
       return;
+    }
+
+    if (data.kind === "request") {
+      if (!isHostClient() || !this.hostService) return;
+      const sessionKey = this.hostService.sessions.get(data.userId)?.publicKey;
+      if (!sameEcdhKey(sessionKey, senderPublicKey)) {
+        throw new Error(localize("FBLPoker.Errors.InvalidSession"));
+      }
+      await this.hostService.enqueue({
+        type: data.type,
+        data: data.data ?? {},
+        userId: data.userId,
+        token: data.token,
+        requestId: data.requestId
+      });
+      return;
+    }
+
+    if (!isHostClient() && this.hostPublicKey && !sameEcdhKey(this.hostPublicKey, senderPublicKey)) {
+      throw new Error(localize("FBLPoker.Errors.InvalidSession"));
     }
 
     if (data.kind === "holeCards") {
@@ -310,7 +408,8 @@ export class PokerSocket {
       if (!payload || typeof payload !== "object") return;
 
       if (payload.type === REQUEST.HELLO) {
-        if (!isHostClient() || !this.hostService || payload.userId === game.user.id) return;
+        if (!isHostClient() || !this.hostService || !this.crypto.secure || payload.userId === game.user.id) return;
+        if (payload.publicKey?.mode !== "ecdh" || !payload.publicKey.jwk) return;
         if (payload.hostUserId && payload.hostUserId !== game.user.id) return;
         const session = this.hostService.registerSession(payload.userId, payload.publicKey);
         if (!session) return;
@@ -319,16 +418,16 @@ export class PokerSocket {
           kind: "session",
           token: session.token,
           hostUserId: game.user.id,
-          secureTransport: this.crypto.secure && payload.publicKey?.mode !== "plain"
+          secureTransport: true
         });
         await this.hostService.sendPrivateHandsForUser(payload.userId);
         return;
       }
 
       if (payload.type === REQUEST.SESSION || payload.type === REQUEST.PRIVATE) {
-        if (payload.recipient !== game.user.id) return;
+        if (payload.recipient !== game.user.id || payload.senderPublicKey?.mode !== "ecdh") return;
         const data = await this.crypto.decrypt(payload.senderPublicKey, payload.encrypted);
-        await this.#handlePrivateData(data);
+        await this.#handlePrivateData(data, payload.senderPublicKey);
         return;
       }
 

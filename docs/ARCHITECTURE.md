@@ -4,7 +4,7 @@
 
 - `engine/`: pure card, evaluation, side-pot, table-state and public hand-history logic
 - `economy/`: Forbidden Lands currency adapter
-- `network/`: active-GM host, socket transport, encrypted or HTTP-compatible private payloads
+- `network/`: active-GM host, socket transport, and encrypted private payloads
 - `apps/`: Application V2 lobby, table administration, top-up, history and table UI
 - `storage.js`: public state and transaction ledger
 
@@ -16,9 +16,9 @@ Currency operations are serialized through the host queue. If a buy-in or top-up
 
 ## Private cards
 
-On secure browser contexts, each client creates an ephemeral P-256 ECDH key pair. The host derives a per-client AES-GCM key and broadcasts encrypted private payloads. Other clients receive ciphertext but cannot decrypt it through the normal module UI.
+Each client creates an ephemeral P-256 ECDH key pair. The host derives a per-client AES-GCM key and broadcasts encrypted private payloads. Session establishment, remote action requests, acknowledgements, errors, and hole cards all travel inside this encrypted envelope. Other clients receive ciphertext but cannot decrypt it through the normal module UI.
 
-Foundry worlds are often joined through a plain HTTP address. If `crypto.subtle` is unavailable, the network layer remains active and sends recipient-targeted compatibility payloads. This preserves multiplayer functionality but does not protect against a hostile user inspecting raw socket traffic.
+The network layer requires `crypto.subtle`. If a browser is opened in a context where Web Crypto is unavailable, such as many plain HTTP deployments, initialization fails closed. There is no readable compatibility transport for hole cards, session tokens, acknowledgements, or private errors.
 
 ## Persistence
 

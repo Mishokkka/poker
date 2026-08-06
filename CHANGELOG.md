@@ -1,3 +1,17 @@
+## 1.7.4
+
+- Removed the readable private-payload fallback. Poker now requires Web Crypto and fails closed when secure ECDH/AES-GCM transport is unavailable.
+- Encrypted remote action requests after session establishment so session tokens and request details are no longer sent as readable socket payloads.
+- Preserved tables and unpaid seats when a table-deletion payout fails, allowing the GM to fix the Actor and retry without duplicating successful payouts.
+- Limited the short-wallet GM override to automated NPC seats; manually controlled Actors must fund their full buy-in.
+- Prevented stale automatic-next-hand, bot, and turn callbacks from acting after their timer was replaced or the host service shut down.
+- Prevented an asynchronously initializing host service from becoming active after socket shutdown or host-role loss.
+- Kept the host operation queue usable when an acknowledgement or private error cannot be delivered to a disconnected client.
+- Isolated invalid stored tables during migration, preserved their original data, and continued loading valid tables.
+- Rejected fractional or malformed currency, table-configuration, stored-stack, bet, and raise values instead of truncating them.
+- Corrected compatibility documentation to the tested Foundry VTT 13.351 and Forbidden Lands 13.0.5 targets.
+- Expanded lifecycle, migration, encryption, payout-recovery, timer, and validation regression coverage.
+
 ## 1.7.3
 
 - Added explicit stored-table schema migration and rejection of data created by unsupported newer module versions.

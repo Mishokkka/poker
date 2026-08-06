@@ -109,7 +109,7 @@ export class SeatDialogApp extends HandlebarsApplicationMixin(ApplicationV2) {
         });
       } else {
         const actorId = form.querySelector('[name="actorId"]')?.value;
-        const buyIn = Number.parseInt(form.querySelector('[name="buyIn"]')?.value, 10);
+        const buyIn = Number(form.querySelector('[name="buyIn"]')?.value);
         const botLevel = game.user.isGM ? (form.querySelector('[name="botLevel"]')?.value || null) : null;
         const botPersonality = botLevel ? (form.querySelector('[name="botPersonality"]')?.value || BOT_PERSONALITIES.CALM) : null;
         if (!actorId) throw new Error("FBLPoker.Errors.SelectActor");

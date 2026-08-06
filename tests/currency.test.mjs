@@ -34,5 +34,6 @@ assert.deepEqual(transaction.after, { gold: 1, silver: 1, copper: 0, totalCopper
 assert.equal(actor.updates, 1);
 
 assert.throws(() => currency.denominations(Number.NaN), /InvalidCurrencyChange/);
+assert.throws(() => currency.denominations(1.5), /InvalidCurrencyChange/, "Fractional copper totals must not be truncated.");
 assert.equal(currency.supports({ system: { currency: {} } }), false);
 console.log("Currency validation test passed.");
