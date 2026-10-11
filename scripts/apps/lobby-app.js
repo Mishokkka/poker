@@ -2,7 +2,6 @@ import { REQUEST } from "../constants.js";
 import { getPokerSocket } from "../runtime.js";
 import { notifyError } from "../util.js";
 import { CreateTableApp } from "./create-table-app.js";
-import { PokerTableApp } from "./table-app.js";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
@@ -31,7 +30,10 @@ export class PokerLobbyApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   constructor(options = {}) {
     super(options);
-    this._stateHook = () => this.render();
+    this._stateHook = (_tables, changes) => {
+      if (changes && changes.lobbyChanged === false) return;
+      this.render();
+    };
   }
 
   async _prepareContext(options) {
@@ -61,17 +63,18 @@ export class PokerLobbyApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   static openTable(_event, target) {
-    new PokerTableApp({ tableId: target.dataset.tableId }).render({ force: true });
+    game.fblPoker.openTable(target.dataset.tableId);
   }
 
   static async deleteTable(_event, target) {
+    const expected = getPokerSocket().expectedState(target.dataset.tableId);
     try {
       const confirmed = await foundry.applications.api.DialogV2.confirm({
         window: { title: "FBLPoker.Delete.Title" },
         content: `<p>${game.i18n.localize("FBLPoker.Delete.Confirm")}</p>`,
         modal: true
       });
-      if (confirmed) await getPokerSocket().request(REQUEST.DELETE_TABLE, { tableId: target.dataset.tableId });
+      if (confirmed) await getPokerSocket().request(REQUEST.DELETE_TABLE, { tableId: target.dataset.tableId, expected });
     } catch (error) {
       notifyError(error);
     }

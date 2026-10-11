@@ -3,6 +3,7 @@
 {{else}}
 <section class="fbl-poker-table-shell {{#if paused}}is-paused{{/if}}">
   <main class="fbl-poker-stage">
+    {{#if blockedMessage}}<div class="fbl-poker-recovery-message" role="alert">{{blockedMessage}}</div>{{/if}}
     <div class="fbl-poker-felt">
       {{#if paused}}
         <div class="fbl-poker-pause-overlay"><i class="fa-solid fa-pause"></i><strong>{{localize "FBLPoker.Table.Paused"}}</strong></div>
@@ -10,12 +11,12 @@
 
       <div class="fbl-poker-center">
         <div class="fbl-poker-center-top">
-          <div class="fbl-poker-deck {{#if deckDealing}}is-dealing{{/if}}" style="--deal-duration:{{deckDealDuration}}ms" aria-label="{{localize 'FBLPoker.Table.Deck'}}">
+          <div class="fbl-poker-deck {{#if deckDealing}}is-dealing{{/if}}" data-poker-effect="deck" style="--deal-cycles:{{deckDealCycles}}" aria-label="{{localize 'FBLPoker.Table.Deck'}}">
             <span class="fbl-poker-deck-card layer-3"></span>
             <span class="fbl-poker-deck-card layer-2"></span>
             <span class="fbl-poker-deck-card layer-1"></span>
           </div>
-          <div class="fbl-poker-pot {{#if potAnimated}}is-animated{{/if}}"><span>{{localize "FBLPoker.Table.Pot"}}</span><strong>{{table.potTotal}}</strong></div>
+          <div class="fbl-poker-pot {{#if potAnimated}}is-animated{{/if}}" data-poker-effect="pot"><span>{{potLabel}}</span><strong>{{displayedPot}}</strong></div>
         </div>
 
         <div class="fbl-poker-community">
@@ -23,7 +24,7 @@
             {{#if empty}}
               <div class="fbl-poker-card empty"></div>
             {{else}}
-              <div class="fbl-poker-card community-card {{#if red}}red{{/if}} {{#if animateDeal}}is-dealing{{/if}}" style="--deal-delay:{{dealDelay}}ms">
+              <div class="fbl-poker-card community-card {{#if red}}red{{/if}} {{#if animateDeal}}is-dealing{{/if}}" data-poker-effect="{{effectKey}}" style="--effect-delay:{{dealDelay}}ms" role="img" aria-label="{{label}}">
                 <span class="fbl-poker-card-corner top"><span>{{rank}}</span><span>{{symbol}}</span></span>
                 <span class="fbl-poker-card-corner bottom"><span>{{rank}}</span><span>{{symbol}}</span></span>
               </div>
@@ -32,7 +33,7 @@
         </div>
 
         {{#if hasResult}}
-          <div class="fbl-poker-result-banner">
+          <div class="fbl-poker-result-banner" role="status" aria-live="polite" aria-atomic="true">
             {{#each resultAwards}}
               <span><i class="fa-solid fa-trophy"></i> <strong>{{actorName}}</strong> +{{amount}}{{#if categoryLabel}} · {{categoryLabel}}{{/if}}</span>
             {{/each}}
@@ -48,12 +49,12 @@
               <span>{{localize "FBLPoker.Table.TakeSeat"}}</span>
             </button>
           {{else}}
-            <div class="fbl-poker-hole-cards" aria-hidden="true">
+            <div class="fbl-poker-hole-cards">
               {{#each cards}}
                 {{#if hidden}}
-                  <div class="fbl-poker-card back {{#if animateDeal}}is-dealing{{/if}}" style="--deal-delay:{{dealDelay}}ms"></div>
+                  <div class="fbl-poker-card back {{#if animateDeal}}is-dealing{{/if}}" data-poker-effect="{{effectKey}}" style="--effect-delay:{{dealDelay}}ms" role="img" aria-label="{{label}}"></div>
                 {{else}}
-                  <div class="fbl-poker-card hole-card {{#if red}}red{{/if}} {{#if animateDeal}}is-dealing{{/if}}" style="--deal-delay:{{dealDelay}}ms">
+                  <div class="fbl-poker-card hole-card {{#if red}}red{{/if}} {{#if animateDeal}}is-dealing{{/if}}" data-poker-effect="{{effectKey}}" style="--effect-delay:{{dealDelay}}ms" role="img" aria-label="{{label}}">
                     <span class="fbl-poker-card-corner top"><span>{{rank}}</span><span>{{symbol}}</span></span>
                   </div>
                 {{/if}}
@@ -61,7 +62,7 @@
             </div>
 
             {{#if showBetChips}}
-              <div class="fbl-poker-seat-bet {{betPlacement}} {{#if chipAnimated}}is-animated{{/if}}">
+              <div class="fbl-poker-seat-bet {{betPlacement}} {{#if chipAnimated}}is-animated{{/if}}" data-poker-effect="chips:{{index}}">
                 <i class="fa-solid fa-coins"></i><strong>{{streetBet}}</strong>
               </div>
             {{/if}}
@@ -142,17 +143,17 @@
               <button type="button" data-action="quickAmount" data-amount="{{legal.maxTarget}}">MAX</button>
             </div>
             <div class="fbl-poker-bet-controls">
-              <input type="range" name="raiseRange" min="{{legal.minTarget}}" max="{{legal.maxTarget}}" value="{{legal.minTarget}}">
-              <input type="number" name="raiseAmount" min="{{legal.minTarget}}" max="{{legal.maxTarget}}" value="{{legal.minTarget}}">
+              <input type="range" name="raiseRange" min="{{legal.minTarget}}" max="{{legal.maxTarget}}" value="{{raiseValue}}" aria-label="{{localize 'FBLPoker.Table.RaiseAmount'}}">
+              <input type="number" name="raiseAmount" min="{{legal.minTarget}}" max="{{legal.maxTarget}}" value="{{raiseValue}}" aria-label="{{localize 'FBLPoker.Table.RaiseAmount'}}">
             </div>
           {{/if}}
           <div class="fbl-poker-action-buttons">
-            <button type="button" data-action="pokerAction" data-action-type="fold">{{localize "FBLPoker.Actions.fold"}}</button>
-            {{#if legal.canCheck}}<button type="button" data-action="pokerAction" data-action-type="check">{{localize "FBLPoker.Actions.check"}}</button>{{/if}}
-            {{#if legal.canCall}}<button type="button" data-action="pokerAction" data-action-type="call">{{localize "FBLPoker.Actions.call"}} {{legal.callAmount}}</button>{{/if}}
-            {{#if legal.canBet}}<button type="button" data-action="pokerAction" data-action-type="bet">{{localize "FBLPoker.Actions.bet"}}</button>{{/if}}
-            {{#if legal.canRaise}}<button type="button" data-action="pokerAction" data-action-type="raise">{{localize "FBLPoker.Actions.raise"}}</button>{{/if}}
-            {{#if legal.canAllIn}}<button type="button" data-action="pokerAction" data-action-type="allIn">{{localize "FBLPoker.Actions.allIn"}}</button>{{/if}}
+            <button type="button" data-action="pokerAction" {{#if actionPending}}disabled{{/if}} data-action-type="fold">{{localize "FBLPoker.Actions.fold"}}</button>
+            {{#if legal.canCheck}}<button type="button" data-action="pokerAction" {{#if actionPending}}disabled{{/if}} data-action-type="check">{{localize "FBLPoker.Actions.check"}}</button>{{/if}}
+            {{#if legal.canCall}}<button type="button" data-action="pokerAction" {{#if actionPending}}disabled{{/if}} data-action-type="call">{{localize "FBLPoker.Actions.call"}} {{legal.callAmount}}</button>{{/if}}
+            {{#if legal.canBet}}<button type="button" data-action="pokerAction" {{#if actionPending}}disabled{{/if}} data-action-type="bet">{{localize "FBLPoker.Actions.bet"}}</button>{{/if}}
+            {{#if legal.canRaise}}<button type="button" data-action="pokerAction" {{#if actionPending}}disabled{{/if}} data-action-type="raise">{{localize "FBLPoker.Actions.raise"}}</button>{{/if}}
+            {{#if legal.canAllIn}}<button type="button" data-action="pokerAction" {{#if actionPending}}disabled{{/if}} data-action-type="allIn">{{localize "FBLPoker.Actions.allIn"}}</button>{{/if}}
           </div>
         </div>
       {{else}}
@@ -163,7 +164,7 @@
             {{#if autoNextWaiting}}<small>{{localize "FBLPoker.Table.AutoNextIn"}} <strong data-auto-next-countdown>0</strong></small>{{/if}}
           </div>
         {{else}}
-        <div class="fbl-poker-waiting-action">
+        <div class="fbl-poker-waiting-action" role="status" aria-live="polite" aria-atomic="true">
           {{#if autoNextWaiting}}
             {{localize "FBLPoker.Table.AutoNextIn"}} <strong data-auto-next-countdown>0</strong>
           {{else if actingSeat}}

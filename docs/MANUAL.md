@@ -16,12 +16,14 @@ Rules can be edited between hands. Seat count and chip value are locked while an
 
 Choose an Actor you own, enter a buy-in inside the table limits, then click an empty chair. The module converts the Actor's entire wallet to a canonical copper value, deducts the buy-in, then writes the remaining amount back as gold, silver, and copper.
 
+A GM can also seat a character without enough currency, for either manual or automatic control. Available currency is used and the missing amount is granted by the GM; this does not change table buy-in limits or top-up rules.
+
 A single Actor cannot be seated at multiple module tables.
 
 
 ## NPC poker bots
 
-A GM can add a bot from the same dialog used to occupy an empty seat. Select an NPC Actor, enter the buy-in, and choose Novice, Experienced, or Expert in the seat-controller field. A normal player-controlled Actor must have enough Forbidden Lands currency for the buy-in. A GM may seat an NPC with a full stack even when its wallet is short; the Actor pays only the currency currently available, and the table still grants the selected buy-in.
+A GM can add a bot from the same dialog used to occupy an empty seat. Select an NPC Actor, enter the buy-in, and choose Novice, Experienced, or Expert in the seat-controller field. A player seating their own Actor must cover the full buy-in. A GM may seat any character, manually controlled or automated, with the full selected stack even when its wallet is empty or short. The Actor pays the available amount up to the buy-in cost; the GM grants the remainder, recorded as `subsidyCopper`. Cash-out returns the full remaining stack at the table chip value.
 
 Novice bots play loosely and make intentional errors. Experienced bots use equity, pot odds, and position. Expert bots run a larger local equity simulation and vary their sizing and bluffs. Bots act automatically after a short thinking delay. Their hidden cards remain concealed in the table UI until showdown.
 
@@ -33,7 +35,9 @@ The action panel appears only for the user who controls the current seat. A GM m
 
 Bet and raise inputs are total street amounts, not an amount added on top. The range input and quick buttons calculate minimum, one-third-pot, half-pot, three-quarter-pot, pot and maximum legal targets.
 
-When the timer expires, the host checks automatically when checking is legal; otherwise it folds. A GM may pause the hand. Resuming starts a fresh action timer for the current seat.
+When the timer expires, the host checks automatically when checking is legal; otherwise it folds. A GM may pause the hand. Resuming preserves the unused part of the current action timer. Client countdowns use the host clock, with approximate network-delivery accuracy.
+
+Card animations resume at their current progress when the window updates or private cards arrive. The host adds a dealing allowance before the configured action countdown; bots also wait for this allowance before their thinking delay. Players may still act early. The result banner and winner highlight appear after the remaining board animations, and automatic next-hand scheduling includes that presentation allowance. Pausing or resetting finishes the current visual effects without replaying them on resume. Reduced-motion preferences remove visual effects and local result waits; the host allowance remains common to all clients.
 
 ## Stack management
 
@@ -54,9 +58,11 @@ Unshown folded cards and cards from uncontested pots are never added to public h
 If the host reloads during an active hand, the hand is cancelled. Every seat receives its committed chips back. This is deliberate because the deck and hole cards are never persisted publicly.
 
 
-## Remote clients and Web Crypto
+## Remote clients
 
-Private poker transport requires Web Crypto. Every participating browser must open Foundry through HTTPS or localhost. If the API is unavailable, the module refuses to initialize rather than sending hole cards, session tokens, action requests, acknowledgements, or private errors as readable socket payloads.
+Remote poker traffic uses Foundry VTT v13 targeted user queries. Players may connect through the same local-network HTTP address they normally use for Foundry; HTTPS or localhost is no longer required for poker initialization. Hole cards, session tokens, action requests, and private errors are not placed on the module's broadcast socket.
+
+Players must retain Foundry's normal `QUERY_USER` permission. If that permission is disabled for a role, remote poker requests from that role cannot be delivered to the active GM.
 ## Sound settings
 
 The GM-only speaker icon in the table title bar opens the sound editor. Each poker event has its own path, preview button, and volume slider. Empty or reset paths use the bundled sounds in `assets/sounds`. Volume zero disables the selected event.
@@ -80,3 +86,20 @@ Automated seats are not visually identified at the table. Their control metadata
 ## Seat management
 
 Right-click a seat you control to open its management menu. Top-up, sit-out, queued sit-out, queued departure, and cash-out are available there according to the current hand state.
+
+## Interrupted money operations (1.7.10)
+
+A buy-in, top-up or payout first saves a pending operation in `moneyJournal`. The wallet write includes a transaction marker. Table persistence follows, then the operation becomes committed. There is no automatic compensating wallet write after an ambiguous error.
+
+If a recovery banner appears:
+
+1. Use Refresh. A matching Actor transaction marker lets the host complete table persistence automatically, without writing the wallet again.
+2. If the banner remains, the GM can open the scales button in the table title bar. Verify that the earlier Actor request has finished; reconnect/reload the GM client if necessary. Compare the Actor wallet and its change history with the operation's before/after totals in copper.
+3. Choose **Wallet changed** only if that exact operation took effect. Choose **Wallet unchanged** only if it did not. These choices finalize or cancel the table mutation and never write Actor currency. Cancel when the evidence is ambiguous.
+4. If no pending money operation exists, the banner reflects a failed ordinary state save. Reload the GM client after storage is available again. As before, an active hand is cancelled and committed bets return to stacks.
+
+The same Actor and table cannot start another money operation while an earlier one is pending. Table deletion pays and durably removes seats one at a time. A retry pays only seats still present. The 500-entry display ledger is supplementary: do not clear the durable journal to bypass recovery.
+
+If private cards cannot be delivered, the table displays a delivery message and stops its turn/bot/next-hand timers. Restore the affected player's connection and query permission, then use Refresh to retry. A GM may reset the active hand. Dealing remains paused until all required deliveries succeed.
+
+The pot shown after completion is the awarded pot of that hand. It stays unchanged when a player leaves; the engine's active pot is zero. Exported new hands include their own chip value and currency rates. Older histories lack this information and are not retroactively assigned today's rates.

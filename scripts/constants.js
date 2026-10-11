@@ -1,6 +1,7 @@
 export const MODULE_ID = "fbl-poker-table";
 export const SOCKET_NAME = `module.${MODULE_ID}`;
-export const SCHEMA_VERSION = 4;
+export const QUERY_NAME = `${MODULE_ID}.rpc`;
+export const SCHEMA_VERSION = 5;
 
 export const TABLE_STATUS = Object.freeze({
   WAITING: "waiting",
@@ -66,6 +67,7 @@ export const REQUEST = Object.freeze({
   FORCE_RESET: "forceReset",
   SET_AUTO_NEXT: "setAutoNext",
   SET_CARDS_REVEALED: "setCardsRevealed",
+  RESOLVE_MONEY: "resolveMoney",
   REQUEST_STATE: "requestState"
 });
 

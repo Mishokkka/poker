@@ -2,6 +2,7 @@ import { ACTIONS, ACTIVE_STREETS, BOT_LEVELS, BOT_PERSONALITIES, DEFAULT_TABLE, 
 import { createDeck, shuffleDeck } from "./cards.js";
 import { compareEvaluations, evaluateSeven } from "./evaluator.js";
 import { buildSidePots, clockwiseOrder } from "./pots.js";
+import { legalActions } from "./legal-actions.js";
 
 function occupied(seat) {
   return Boolean(seat?.actorId && seat?.userId);
@@ -119,6 +120,8 @@ function normalizeSeat(seat, index) {
     allIn: Boolean(seat.allIn),
     streetBet: storedNonNegativeInteger(seat.streetBet),
     handCommitted: storedNonNegativeInteger(seat.handCommitted),
+    actedAtBet: seat.actedAtBet == null ? null : storedNonNegativeInteger(seat.actedAtBet),
+    actedRaiseSize: seat.actedRaiseSize == null ? null : storedNonNegativeInteger(seat.actedRaiseSize),
     lastAction: seat.lastAction ?? null,
     cardsCount: storedNonNegativeInteger(seat.cardsCount),
     revealedCards: Array.isArray(seat.revealedCards) ? [...seat.revealedCards] : []
@@ -145,6 +148,7 @@ export function migrateTableState(source, fallbackSchemaVersion = 0) {
   migrated.handParticipants = Array.isArray(migrated.handParticipants) ? migrated.handParticipants : [];
   migrated.handActions = Array.isArray(migrated.handActions) ? migrated.handActions : [];
   migrated.handHistory = Array.isArray(migrated.handHistory) ? migrated.handHistory : [];
+  migrated.historyRevision = storedNonNegativeInteger(migrated.historyRevision, migrated.handHistory.length ? 1 : 0);
   migrated.autoNextHand = boolean(migrated.autoNextHand, DEFAULT_TABLE.autoNextHand);
   migrated.autoNextHandSeconds = integer(migrated.autoNextHandSeconds, DEFAULT_TABLE.autoNextHandSeconds);
   migrated.nextHandDeadline = finiteNumberOrNull(migrated.nextHandDeadline);
@@ -163,6 +167,7 @@ export function createTableState(configuration = {}) {
     status: TABLE_STATUS.WAITING,
     paused: false,
     revision: 0,
+    historyRevision: 0,
     handNumber: 0,
     dealerIndex: -1,
     smallBlindIndex: null,
@@ -214,6 +219,7 @@ export class PokerTableEngine {
       handParticipants: [...(state.handParticipants ?? [])],
       handActions: [...(state.handActions ?? [])],
       handHistory: [...(state.handHistory ?? [])].slice(0, 100),
+      historyRevision: storedNonNegativeInteger(state.historyRevision, (state.handHistory ?? []).length ? 1 : 0),
       turnDeadline: finiteNumberOrNull(state.turnDeadline),
       turnTimeRemaining: finiteNumberOrNull(state.turnTimeRemaining, { nonNegative: true }),
       nextHandDeadline: finiteNumberOrNull(state.nextHandDeadline)
@@ -225,6 +231,7 @@ export class PokerTableEngine {
   }
 
   get potTotal() {
+    if (!this.isActiveHand) return 0;
     return this.state.seats.reduce((total, seat) => total + (seat?.handCommitted ?? 0), 0);
   }
 
@@ -232,13 +239,19 @@ export class PokerTableEngine {
     return [...(this.#holeCards.get(seatIndex) ?? [])];
   }
 
-  storageState() {
-    this.state.pots = buildSidePots(this.state.seats.filter(Boolean));
-    return structuredClone({ ...this.state, potTotal: this.potTotal });
+  storageState({ includeHistory = true } = {}) {
+    this.state.pots = this.isActiveHand ? buildSidePots(this.state.seats.filter(Boolean)) : [];
+    const source = { ...this.state, potTotal: this.potTotal };
+    if (!includeHistory) delete source.handHistory;
+    return structuredClone(source);
   }
 
-  publicState() {
-    const state = this.storageState();
+  historyState() {
+    return structuredClone(this.state.handHistory ?? []);
+  }
+
+  publicState({ includeHistory = true } = {}) {
+    const state = this.storageState({ includeHistory });
     state.seats = state.seats.map((seat) => {
       if (!seat) return null;
       const { isBot: _isBot, botLevel: _botLevel, botPersonality: _botPersonality, ...publicSeat } = seat;
@@ -395,7 +408,10 @@ export class PokerTableEngine {
     seat.revealedCards = shouldReveal ? [...cards] : [];
     const history = this.state.handHistory.find((hand) => hand.handNumber === this.state.handNumber);
     const participant = history?.participants?.find((candidate) => candidate.seatIndex === index);
-    if (participant) participant.cards = [...seat.revealedCards];
+    if (participant) {
+      participant.cards = [...seat.revealedCards];
+      this.state.historyRevision += 1;
+    }
     this.#log(shouldReveal ? "showCards" : "hideCards", index);
     this.touch();
   }
@@ -413,6 +429,7 @@ export class PokerTableEngine {
     this.#holeCards.clear();
     this.state.status = TABLE_STATUS.WAITING;
     this.state.paused = false;
+    this.state.deliveryPending = false;
     this.state.currentSeat = null;
     this.state.turnDeadline = null;
     this.state.turnTimeRemaining = null;
@@ -433,6 +450,7 @@ export class PokerTableEngine {
   }
 
   startHand() {
+    if (this.state.recoveryRequired) throw new Error("FBLPoker.Errors.RecoveryRequired");
     if (this.isActiveHand) throw new Error("FBLPoker.Errors.HandInProgress");
     const eligible = this.#eligibleSeatIndices();
     if (eligible.length < 2) throw new Error("FBLPoker.Errors.NotEnoughPlayers");
@@ -444,6 +462,7 @@ export class PokerTableEngine {
     this.state.status = TABLE_STATUS.PREFLOP;
     this.state.nextHandDeadline = null;
     this.state.paused = false;
+    this.state.deliveryPending = false;
     this.state.community = [];
     this.state.lastResult = null;
     this.state.acted = [];
@@ -478,7 +497,7 @@ export class PokerTableEngine {
     }
     this.#postBlind(this.state.smallBlindIndex, this.state.smallBlind, "smallBlind");
     this.#postBlind(this.state.bigBlindIndex, this.state.bigBlind, "bigBlind");
-    this.state.currentBet = Math.max(...eligible.map((index) => this.state.seats[index].streetBet));
+    this.state.currentBet = Math.max(this.state.bigBlind, ...eligible.map((index) => this.state.seats[index].streetBet));
 
     const dealOrder = this.#orderedAfter(this.state.dealerIndex, eligible);
     for (let round = 0; round < 2; round += 1) {
@@ -494,7 +513,8 @@ export class PokerTableEngine {
     this.#log("handStart", null, this.state.handNumber);
     this.touch();
 
-    if (this.state.currentSeat === null) this.#runoutAndShowdown();
+    const actionable = this.state.seats.filter(canAct);
+    if (!actionable.length || (actionable.length === 1 && actionable[0].streetBet >= Math.max(...eligible.filter(i => i !== actionable[0].index).map(i => this.state.seats[i].streetBet)))) this.#runoutAndShowdown();
     return this.privateHands();
   }
 
@@ -503,27 +523,7 @@ export class PokerTableEngine {
   }
 
   legalActions(index) {
-    const seat = this.#seat(index);
-    if (this.state.paused || !ACTIVE_STREETS.has(this.state.status) || this.state.currentSeat !== index || !canAct(seat)) return null;
-    const callAmount = Math.max(0, this.state.currentBet - seat.streetBet);
-    const maxTarget = seat.streetBet + seat.stack;
-    const minTarget = this.state.currentBet === 0
-      ? this.state.bigBlind
-      : (this.state.currentBet < this.state.bigBlind ? this.state.bigBlind : this.state.currentBet + this.state.lastFullRaise);
-    const raiseAllowed = !this.state.raiseLocked.includes(index) && maxTarget > this.state.currentBet;
-    return {
-      callAmount: Math.min(callAmount, seat.stack),
-      canFold: true,
-      canCheck: callAmount === 0,
-      canCall: callAmount > 0 && seat.stack > 0,
-      canBet: this.state.currentBet === 0 && raiseAllowed,
-      canRaise: this.state.currentBet > 0 && raiseAllowed,
-      canAllIn: seat.stack > 0,
-      minTarget: Math.min(maxTarget, minTarget),
-      fullRaiseTarget: minTarget,
-      maxTarget,
-      potTotal: this.potTotal
-    };
+    return legalActions({ ...this.state, potTotal: this.potTotal }, this.#seat(index));
   }
 
   act(index, action, amount = null) {
@@ -574,12 +574,17 @@ export class PokerTableEngine {
         throw new Error("FBLPoker.Errors.InvalidAction");
     }
 
+    seat.actedAtBet = this.state.currentBet;
+    seat.actedRaiseSize = this.state.lastFullRaise;
+    this.state.raiseLocked = this.state.seats.filter(s => canAct(s) && s.actedAtBet !== null
+      && this.state.currentBet - s.actedAtBet < s.actedRaiseSize).map(s => s.index);
     this.#log(seat.lastAction?.type ?? action, index, seat.lastAction?.amount ?? amount ?? 0);
     this.touch();
     this.#afterAction(index);
   }
 
   forceReset() {
+    if (!this.isActiveHand) return false;
     const refunded = this.potTotal;
     for (const seat of this.state.seats.filter(Boolean)) {
       seat.stack += seat.handCommitted;
@@ -591,6 +596,7 @@ export class PokerTableEngine {
     this.#holeCards.clear();
     this.state.status = TABLE_STATUS.WAITING;
     this.state.paused = false;
+    this.state.deliveryPending = false;
     this.state.currentSeat = null;
     this.state.turnDeadline = null;
     this.state.turnTimeRemaining = null;
@@ -612,11 +618,12 @@ export class PokerTableEngine {
     const seat = this.#seat(index);
     const maxTarget = seat.streetBet + seat.stack;
     if (target <= this.state.currentBet || target > maxTarget) throw new Error("FBLPoker.Errors.InvalidBet");
-    if (this.state.raiseLocked.includes(index)) throw new Error("FBLPoker.Errors.RaiseNotReopened");
+    const legal = this.legalActions(index);
+    if (!legal?.canBet && !legal?.canRaise) throw new Error("FBLPoker.Errors.RaiseNotReopened");
 
     const fullRaiseTarget = this.state.currentBet === 0
       ? this.state.bigBlind
-      : (this.state.currentBet < this.state.bigBlind ? this.state.bigBlind : this.state.currentBet + this.state.lastFullRaise);
+      : this.state.currentBet + Math.max(this.state.bigBlind, this.state.lastFullRaise);
     const isAllIn = target === maxTarget;
     const fullRaise = target >= fullRaiseTarget;
     if (!fullRaise && !isAllIn) throw new Error("FBLPoker.Errors.BelowMinimumRaise");
@@ -660,6 +667,7 @@ export class PokerTableEngine {
   #bettingRoundComplete() {
     const actionable = this.state.seats.filter((seat) => canAct(seat));
     if (actionable.length === 0) return true;
+    if (actionable.length === 1 && actionable[0].streetBet >= this.state.currentBet) return true;
     return actionable.every((seat) => this.state.acted.includes(seat.index) && seat.streetBet === this.state.currentBet);
   }
 
@@ -669,7 +677,11 @@ export class PokerTableEngine {
       return;
     }
 
-    for (const seat of this.state.seats.filter(Boolean)) seat.streetBet = 0;
+    for (const seat of this.state.seats.filter(Boolean)) {
+      seat.streetBet = 0;
+      seat.actedAtBet = null;
+      seat.actedRaiseSize = null;
+    }
     this.state.currentBet = 0;
     this.state.lastFullRaise = this.state.bigBlind;
     this.state.acted = [];
@@ -687,13 +699,13 @@ export class PokerTableEngine {
       this.state.status = TABLE_STATUS.RIVER;
     }
 
+    this.#log("street", null, this.state.status);
     const actionable = this.state.seats.filter((seat) => canAct(seat));
     if (actionable.length <= 1) {
       this.#runoutAndShowdown();
       return;
     }
     this.state.currentSeat = this.#nextActionable(this.state.dealerIndex);
-    this.#log("street", null, this.state.status);
     this.touch();
   }
 
@@ -702,6 +714,8 @@ export class PokerTableEngine {
       this.#deck.pop();
       const count = this.state.community.length === 0 ? 3 : 1;
       for (let index = 0; index < count; index += 1) this.state.community.push(this.#deck.pop());
+      this.state.status = this.state.community.length === 3 ? TABLE_STATUS.FLOP : this.state.community.length === 4 ? TABLE_STATUS.TURN : TABLE_STATUS.RIVER;
+      this.#log("street", null, this.state.status);
     }
     this.#showdown();
   }
@@ -709,6 +723,7 @@ export class PokerTableEngine {
   #showdown() {
     this.state.status = TABLE_STATUS.SHOWDOWN;
     this.state.paused = false;
+    this.state.deliveryPending = false;
     this.state.currentSeat = null;
     const evaluations = new Map();
     for (const seat of this.state.seats.filter((candidate) => inHand(candidate) && !candidate.folded)) {
@@ -718,10 +733,10 @@ export class PokerTableEngine {
     }
 
     const pots = buildSidePots(this.state.seats.filter(Boolean));
+    if (pots.some(pot => !pot.eligible.some(index => evaluations.has(index)))) throw new Error("FBLPoker.Errors.InvalidTableState");
     const awards = [];
     for (const pot of pots) {
       const contenders = pot.eligible.filter((index) => evaluations.has(index));
-      if (!contenders.length) continue;
       let winners = [contenders[0]];
       for (const contender of contenders.slice(1)) {
         const comparison = compareEvaluations(evaluations.get(contender), evaluations.get(winners[0]));
@@ -735,12 +750,12 @@ export class PokerTableEngine {
         const award = share + (remainder > 0 ? 1 : 0);
         remainder -= remainder > 0 ? 1 : 0;
         this.state.seats[index].stack += award;
-        awards.push({ seatIndex: index, amount: award, categoryName: evaluations.get(index).categoryName });
+        awards.push({ seatIndex: index, actorId: this.state.seats[index].actorId, actorName: this.state.seats[index].actorName, amount: award, categoryName: evaluations.get(index).categoryName });
       }
     }
 
     this.state.pots = pots;
-    this.state.lastResult = { type: "showdown", awards };
+    this.state.lastResult = { type: "showdown", awards, potTotal: this.potTotal, pots: structuredClone(pots) };
     this.state.status = TABLE_STATUS.COMPLETE;
     this.#log("showdown", null, awards.reduce((sum, award) => sum + award.amount, 0));
     this.#finalizeHandHistory("showdown", awards);
@@ -751,9 +766,10 @@ export class PokerTableEngine {
     const amount = this.potTotal;
     winner.stack += amount;
     this.state.paused = false;
+    this.state.deliveryPending = false;
     this.state.currentSeat = null;
-    const awards = [{ seatIndex: winner.index, amount }];
-    this.state.lastResult = { type: "uncontested", awards };
+    const awards = [{ seatIndex: winner.index, actorId: winner.actorId, actorName: winner.actorName, amount }];
+    this.state.lastResult = { type: "uncontested", awards, potTotal: amount };
     this.state.status = TABLE_STATUS.COMPLETE;
     this.state.pots = buildSidePots(this.state.seats.filter(Boolean));
     this.#log("uncontested", winner.index, amount);
@@ -787,13 +803,16 @@ export class PokerTableEngine {
       smallBlind: this.state.smallBlind,
       bigBlind: this.state.bigBlind,
       ante: this.state.ante,
-      potTotal: this.potTotal,
+      chipValueCopper: this.state.chipValueCopper,
+      currencyRates: this.state.currencyRates ? { ...this.state.currencyRates } : null,
+      potTotal: this.state.lastResult?.potTotal ?? this.potTotal,
       community: [...this.state.community],
       participants,
       awards: enrichedAwards,
       actions: [...this.state.handActions]
     });
     this.state.handHistory = this.state.handHistory.slice(0, 100);
+    this.state.historyRevision += 1;
     this.state.handStartedAt = null;
     this.state.handParticipants = [];
     this.state.handActions = [];
@@ -805,6 +824,8 @@ export class PokerTableEngine {
     seat.allIn = false;
     seat.streetBet = 0;
     seat.handCommitted = 0;
+    seat.actedAtBet = null;
+    seat.actedRaiseSize = null;
     seat.lastAction = null;
     seat.cardsCount = 0;
     seat.revealedCards = [];
@@ -880,7 +901,8 @@ export class PokerTableEngine {
   }
 
   #log(type, seatIndex = null, amount = null) {
-    const entry = { id: `${Date.now()}-${Math.random()}`, type, seatIndex, amount, at: Date.now() };
+    const seat = seatIndex === null ? null : this.state.seats[seatIndex];
+    const entry = { id: `${Date.now()}-${Math.random()}`, type, handNumber: this.state.handNumber, seatIndex, actorId: seat?.actorId ?? null, actorName: seat?.actorName ?? "", amount, at: Date.now() };
     this.state.log.unshift(entry);
     this.state.log = this.state.log.slice(0, 100);
     if (this.state.handStartedAt) this.state.handActions.push(structuredClone(entry));

@@ -36,6 +36,7 @@ export class TopUpApp extends HandlebarsApplicationMixin(ApplicationV2) {
   async _prepareContext(options) {
     const context = await super._prepareContext(options);
     const table = getPokerSocket().getTable(this.tableId);
+    this._expected = table ? { handNumber: table.handNumber, status: table.status, revision: table.revision } : undefined;
     const seat = table?.seats?.[this.seatIndex];
     const actor = seat ? game.actors.get(seat.actorId) : null;
     if (!table || !seat || !actor) return { ...context, missing: true, unsupportedCurrency: false };
@@ -74,6 +75,7 @@ export class TopUpApp extends HandlebarsApplicationMixin(ApplicationV2) {
       const amount = parseStrictInteger(new FormData(form).get("amount"), "FBLPoker.Errors.InvalidTopUp");
       await getPokerSocket().request(REQUEST.TOP_UP, {
         tableId: this.tableId,
+        expected: this._expected,
         seatIndex: this.seatIndex,
         amount
       });

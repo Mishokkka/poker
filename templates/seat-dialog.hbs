@@ -20,7 +20,7 @@
       <img src="{{ownSeat.actorImg}}" alt="{{ownSeat.actorName}}">
       <div>
         <strong>{{ownSeat.actorName}}</strong>
-        <span>{{localize "FBLPoker.SeatDialog.MoveFrom"}} {{ownSeat.index}} {{localize "FBLPoker.SeatDialog.MoveTo"}} {{seatNumber}}</span>
+        <span>{{localize "FBLPoker.SeatDialog.MoveFrom"}} {{ownSeatNumber}} {{localize "FBLPoker.SeatDialog.MoveTo"}} {{seatNumber}}</span>
       </div>
     </div>
   {{else}}
@@ -36,6 +36,7 @@
       <input type="number" name="buyIn" min="{{table.minBuyIn}}" max="{{table.maxBuyIn}}" value="{{defaultBuyIn}}" required>
     </label>
     {{#if isGM}}
+      <small>{{localize "FBLPoker.SeatDialog.GMFundingHint"}}</small>
       <label>
         <span>{{localize "FBLPoker.Bots.Controller"}}</span>
         <select name="botLevel">

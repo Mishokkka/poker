@@ -36,6 +36,7 @@ export class SeatDialogApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const context = await super._prepareContext(options);
     const socket = getPokerSocket();
     const table = socket.getTable(this.tableId);
+    this._expected = table ? { handNumber: table.handNumber, status: table.status, revision: table.revision } : undefined;
     if (!table) return { ...context, missing: true };
 
     const allSeats = [...socket.tables.values()].flatMap((candidate) =>
@@ -47,11 +48,13 @@ export class SeatDialogApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const blockedElsewhere = !game.user.isGM && ownSeats.length > 0 && !ownSeatHere;
     const moveMode = !game.user.isGM && Boolean(ownSeatHere);
 
-    const actors = game.actors
+    const actors = (moveMode || blockedElsewhere ? [] : game.actors.contents ?? game.actors)
       .filter((actor) => currency.actorOwnedBy(actor, game.user) && currency.supports(actor) && !occupiedActorIds.has(actor.id))
-      .map((actor) => {
-        const balance = currency.balance(actor);
-        return { id: actor.id, name: actor.name, img: actor.img, balance: balance.totalCopper };
+      .flatMap((actor) => {
+        try {
+          const balance = currency.balance(actor);
+          return [{ id: actor.id, name: actor.name, img: actor.img, balance: balance.totalCopper }];
+        } catch { return []; }
       })
       .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -74,6 +77,7 @@ export class SeatDialogApp extends HandlebarsApplicationMixin(ApplicationV2) {
       ],
       moveMode,
       ownSeat: ownSeatHere,
+      ownSeatNumber: ownSeatHere ? ownSeatHere.index + 1 : null,
       blockedElsewhere,
       blockingSeat: blockedElsewhere ? ownSeats[0] : null,
       canConfirm: moveMode || (!blockedElsewhere && actors.length > 0),
@@ -104,6 +108,7 @@ export class SeatDialogApp extends HandlebarsApplicationMixin(ApplicationV2) {
       if (!game.user.isGM && ownSeat) {
         await getPokerSocket().request(REQUEST.MOVE_SEAT, {
           tableId: this.tableId,
+        expected: this._expected,
           fromSeatIndex: ownSeat.index,
           toSeatIndex: this.seatIndex
         });
@@ -115,6 +120,7 @@ export class SeatDialogApp extends HandlebarsApplicationMixin(ApplicationV2) {
         if (!actorId) throw new Error("FBLPoker.Errors.SelectActor");
         await getPokerSocket().request(REQUEST.JOIN, {
           tableId: this.tableId,
+        expected: this._expected,
           seatIndex: this.seatIndex,
           actorId,
           buyIn,

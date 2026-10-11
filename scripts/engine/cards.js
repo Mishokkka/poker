@@ -8,8 +8,10 @@ export function shuffleDeck(deck = createDeck(), randomSource = crypto) {
   const shuffled = [...deck];
   for (let i = shuffled.length - 1; i > 0; i -= 1) {
     const bytes = new Uint32Array(1);
-    randomSource.getRandomValues(bytes);
-    const j = bytes[0] % (i + 1);
+    const size = i + 1;
+    const limit = Math.floor(0x100000000 / size) * size;
+    do { randomSource.getRandomValues(bytes); } while (bytes[0] >= limit);
+    const j = bytes[0] % size;
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
   return shuffled;

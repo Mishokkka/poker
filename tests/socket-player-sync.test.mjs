@@ -1,19 +1,50 @@
 import assert from "node:assert/strict";
-import { webcrypto } from "node:crypto";
 
-Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto });
-globalThis.btoa ??= (value) => Buffer.from(value, "binary").toString("base64");
-globalThis.atob ??= (value) => Buffer.from(value, "base64").toString("binary");
+Object.defineProperty(globalThis, "crypto", {
+  configurable: true,
+  value: {
+    getRandomValues(array) {
+      for (let index = 0; index < array.length; index += 1) array[index] = (index * 17 + 11) & 0xff;
+      return array;
+    }
+  }
+});
 
-const gm = { id: "gm", active: true, isGM: true };
+let listener = null;
+let removedListener = null;
+const emitted = [];
+const queries = [];
+const sessionToken = "session-player";
+let socket = null;
+let targetedSnapshot = [];
+let sequence = 0;
+const deliver = payload => listener({ epoch: 1, sequence: ++sequence, ...payload }, payload.hostUserId);
+
 const player = { id: "player", active: true, isGM: false };
+const gm = {
+  id: "gm",
+  active: true,
+  isGM: true,
+  async query(name, payload) {
+    queries.push({ name, payload });
+    if (payload.kind === "provisionSessions") {
+      const delivered = await socket.handleQuery({
+        kind: "sessionDelivery", epoch: 1,
+        hostUserId: gm.id,
+        userId: player.id,
+        token: sessionToken
+      });
+      assert.equal(delivered.ok, true);
+      return { ok: true, hostUserId: gm.id };
+    }
+    if (payload.kind === "request") return { ok: true, value: { kind: "snapshot", epoch: 1, sequence: ++sequence, tables: targetedSnapshot } };
+    return { ok: false, message: "FBLPoker.Errors.InvalidRequest" };
+  }
+};
 const users = {
   contents: [gm, player],
   get: (id) => [gm, player].find((user) => user.id === id) ?? null
 };
-let listener = null;
-let removedListener = null;
-const emitted = [];
 
 globalThis.game = {
   user: player,
@@ -35,20 +66,14 @@ globalThis.ui = { notifications: { error() {} } };
 globalThis.foundry = { utils: { deepClone: structuredClone } };
 
 const { PokerSocket } = await import("../scripts/network/socket.js");
-const { SessionCrypto } = await import("../scripts/network/crypto.js");
-const { REQUEST } = await import("../scripts/constants.js");
+const { QUERY_NAME, REQUEST } = await import("../scripts/constants.js");
 
-const hostCrypto = new SessionCrypto();
-await hostCrypto.initialize();
-const attackerCrypto = new SessionCrypto();
-await attackerCrypto.initialize();
-const socket = new PokerSocket();
+socket = new PokerSocket();
 
 try {
   await socket.initialize();
-  assert.ok(listener, "The player must register its socket listener.");
-  const hello = emitted.find(({ payload }) => payload.type === REQUEST.HELLO)?.payload;
-  assert.equal(hello?.publicKey?.mode, "ecdh");
+  assert.ok(listener, "The player must register its public snapshot listener.");
+  assert.equal(globalThis.crypto.subtle, undefined, "The regression must exercise a plain-HTTP-style browser without crypto.subtle.");
 
   const activeTable = {
     id: "table-1",
@@ -56,83 +81,57 @@ try {
     handNumber: 1,
     seats: [{ index: 0, userId: player.id, cardsCount: 2 }]
   };
-  await listener({ type: REQUEST.SNAPSHOT, hostUserId: "former-gm", tables: [{ ...activeTable, name: "Stale Table" }] });
+  await deliver({ type: REQUEST.SNAPSHOT, hostUserId: "former-gm", tables: [{ ...activeTable, name: "Stale Table" }] });
   assert.equal(socket.getTable("table-1"), null, "Snapshots from a previous host must be ignored.");
-  await listener({ type: REQUEST.SNAPSHOT, hostUserId: gm.id, tables: [activeTable] });
-  assert.equal(socket.getTable("table-1")?.name, "Remote Table", "Public tables must synchronize before session establishment.");
+  await deliver({ type: REQUEST.SNAPSHOT, hostUserId: gm.id, tables: [activeTable] });
+  assert.equal(socket.getTable("table-1")?.name, "Remote Table", "Public tables must synchronize independently of private transport.");
 
-  await listener({
-    type: REQUEST.PRIVATE,
-    recipient: player.id,
-    senderPublicKey: attackerCrypto.publicKey,
-    encrypted: await attackerCrypto.encrypt(hello.publicKey, {
+  targetedSnapshot = [{ ...activeTable, name: "Targeted Refresh Table" }];
+  await socket.synchronize();
+  assert.equal(socket.sessionToken, sessionToken, "A remote player must receive a host-provisioned targeted-query session without Web Crypto.");
+  assert.equal(socket.getTable("table-1")?.name, "Targeted Refresh Table", "REQUEST_STATE must apply the targeted query snapshot on the requesting client.");
+  assert.equal(queries[0]?.name, QUERY_NAME);
+  assert.equal(queries[0]?.payload.kind, "provisionSessions");
+  assert.equal("userId" in queries[0].payload, false, "A player must not be able to choose which user receives a session token.");
+  assert.equal(queries[1]?.payload.kind, "request");
+  assert.equal(queries[1]?.payload.type, REQUEST.REQUEST_STATE);
+  assert.equal(queries[1]?.payload.userId, player.id);
+  assert.equal(queries[1]?.payload.token, sessionToken);
+  assert.equal(emitted.some(({ payload }) => JSON.stringify(payload).includes(sessionToken)), false, "Session tokens must never be placed on the broadcast module socket.");
+
+  const rejected = await socket.handleQuery({
+    kind: "delivery",
+    hostUserId: gm.id,
+    userId: player.id,
+    token: "wrong-token",
+    data: {
       kind: "holeCards",
       tableId: "table-1",
       handNumber: 1,
       seatIndex: 0,
       cards: ["2c", "3d"]
-    })
+    }
   });
-  assert.deepEqual(socket.getPrivateHand("table-1", 1, 0), [], "Private data must be rejected until the active host key is known.");
+  assert.equal(rejected.ok, false, "Private deliveries must require the established targeted-query session token.");
+  assert.deepEqual(socket.getPrivateHand("table-1", 1, 0), []);
 
-  const sessionToken = "session-player";
-  await listener({
-    type: REQUEST.PRIVATE,
-    recipient: player.id,
-    senderPublicKey: hostCrypto.publicKey,
-    encrypted: await hostCrypto.encrypt(hello.publicKey, { kind: "session", token: sessionToken, hostUserId: gm.id })
-  });
-  assert.equal(socket.sessionToken, sessionToken);
-
-  await listener({
-    type: REQUEST.PRIVATE,
-    recipient: player.id,
-    senderPublicKey: attackerCrypto.publicKey,
-    encrypted: await attackerCrypto.encrypt(hello.publicKey, {
-      kind: "holeCards",
-      tableId: "table-1",
-      handNumber: 1,
-      seatIndex: 0,
-      cards: ["4c", "5d"]
-    })
-  });
-  assert.deepEqual(socket.getPrivateHand("table-1", 1, 0), [], "Private data from a key other than the established host key must be rejected.");
-
-  const requestDeadline = Date.now() + 2000;
-  let stateEnvelope = null;
-  while (!stateEnvelope && Date.now() < requestDeadline) {
-    stateEnvelope = emitted.findLast(({ payload }) => payload.type === REQUEST.PRIVATE && payload.recipient === gm.id)?.payload ?? null;
-    if (!stateEnvelope) await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.ok(stateEnvelope, "The player must send the initial state request through encrypted private transport.");
-  assert.equal(JSON.stringify(stateEnvelope).includes(sessionToken), false, "Session tokens must never appear in readable socket payloads.");
-  const stateRequest = await hostCrypto.decrypt(hello.publicKey, stateEnvelope.encrypted);
-  assert.equal(stateRequest.kind, "request");
-  assert.equal(stateRequest.type, REQUEST.REQUEST_STATE);
-  assert.equal(stateRequest.token, sessionToken);
-
-  await listener({
-    type: REQUEST.PRIVATE,
-    recipient: player.id,
-    senderPublicKey: hostCrypto.publicKey,
-    encrypted: await hostCrypto.encrypt(hello.publicKey, { kind: "ack", requestId: stateRequest.requestId })
-  });
-
-  await listener({
-    type: REQUEST.PRIVATE,
-    recipient: player.id,
-    senderPublicKey: hostCrypto.publicKey,
-    encrypted: await hostCrypto.encrypt(hello.publicKey, {
+  const accepted = await socket.handleQuery({
+    kind: "delivery",
+    hostUserId: gm.id,
+    userId: player.id,
+    token: sessionToken,
+    data: {
       kind: "holeCards",
       tableId: "table-1",
       handNumber: 1,
       seatIndex: 0,
       cards: ["As", "Ts"]
-    })
+    }
   });
+  assert.equal(accepted.ok, true);
   assert.deepEqual(socket.getPrivateHand("table-1", 1, 0), ["As", "Ts"]);
 
-  await listener({
+  await deliver({
     type: REQUEST.SNAPSHOT,
     hostUserId: gm.id,
     tables: [{ ...activeTable, seats: [{ ...activeTable.seats[0], cardsCount: 0 }] }]
@@ -143,4 +142,4 @@ try {
 }
 
 assert.equal(removedListener, listener, "Shutdown must remove the registered socket listener.");
-console.log("Encrypted remote player synchronization test passed.");
+console.log("Targeted-query remote player synchronization test passed.");

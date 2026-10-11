@@ -65,6 +65,9 @@ export class CurrencyAdapter {
     if (!Number.isSafeInteger(delta)) throw new Error("FBLPoker.Errors.InvalidCurrencyChange");
 
     const before = this.balance(actor);
+    if (metadata.expectedBefore !== undefined && before.totalCopper !== metadata.expectedBefore) {
+      throw new Error("FBLPoker.Errors.CurrencyChanged");
+    }
     const afterTotal = before.totalCopper + delta;
     if (!Number.isSafeInteger(afterTotal)) throw new Error("FBLPoker.Errors.InvalidCurrencyChange");
     if (afterTotal < 0) throw new Error("FBLPoker.Errors.NotEnoughCurrency");
@@ -73,7 +76,8 @@ export class CurrencyAdapter {
     await actor.update({
       [PATHS.gold]: after.gold,
       [PATHS.silver]: after.silver,
-      [PATHS.copper]: after.copper
+      [PATHS.copper]: after.copper,
+      ...(metadata.transactionId ? { [`flags.${MODULE_ID}.moneyTx`]: { id: metadata.transactionId, before: before.totalCopper, after: afterTotal } } : {})
     }, { fblPoker: metadata });
     return { before, after: { ...after, totalCopper: afterTotal }, deltaCopper: delta };
   }

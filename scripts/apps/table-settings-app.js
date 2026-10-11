@@ -38,6 +38,7 @@ export class TableSettingsApp extends HandlebarsApplicationMixin(ApplicationV2) 
   async _prepareContext(options) {
     const context = await super._prepareContext(options);
     const table = getPokerSocket().getTable(this.tableId);
+    this._expected = table ? { handNumber: table.handNumber, status: table.status, revision: table.revision } : undefined;
     if (!table) return { missing: true };
     return {
       ...context,
@@ -72,7 +73,7 @@ export class TableSettingsApp extends HandlebarsApplicationMixin(ApplicationV2) 
       data.name = String(data.name ?? "").trim();
       const table = getPokerSocket().getTable(this.tableId);
       const normalized = normalizeTableConfiguration(data, table);
-      await getPokerSocket().request(REQUEST.UPDATE_TABLE, { ...normalized, tableId: this.tableId });
+      await getPokerSocket().request(REQUEST.UPDATE_TABLE, { ...normalized, tableId: this.tableId, expected: this._expected });
       await this.close();
     } catch (error) {
       notifyError(error);

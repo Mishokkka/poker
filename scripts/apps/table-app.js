@@ -1,14 +1,17 @@
-import { ACTIONS, ACTIVE_STREETS, REQUEST, TABLE_STATUS } from "../constants.js";
+import { ACTIONS, ACTIVE_STREETS, MODULE_ID, REQUEST, TABLE_STATUS } from "../constants.js";
 import { PokerSoundService } from "../audio/sound-service.js";
+import { legalActions } from "../engine/legal-actions.js";
 import { cardDisplay } from "../engine/cards.js";
 import { getPokerSocket } from "../runtime.js";
-import { notifyError, parseStrictInteger } from "../util.js";
+import { escapeHtml, notifyError, parseStrictInteger } from "../util.js";
 import { PokerHistoryApp } from "./history-app.js";
 import { PokerSoundSettingsApp } from "./sound-settings-app.js";
 import { SeatDialogApp } from "./seat-dialog-app.js";
 import { TableSettingsApp } from "./table-settings-app.js";
 import { TopUpApp } from "./top-up-app.js";
 import { seatEllipsePosition } from "./table-geometry.js";
+import { TablePresentation, positionCardOrigins } from "./table-presentation.js";
+import { PRESENTATION } from "../presentation-timing.js";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
@@ -19,54 +22,8 @@ function actionLabel(action) {
 }
 
 function cardView(card, hidden = false) {
-  if (hidden) return { hidden: true, rank: "", symbol: "", red: false };
-  return { ...cardDisplay(card), hidden: false };
-}
-
-function legalActions(table, seat) {
-  if (table.paused || !seat || !ACTIVE_STREETS.has(table.status) || table.currentSeat !== seat.index || seat.folded || seat.allIn) return null;
-  const callAmount = Math.max(0, table.currentBet - seat.streetBet);
-  const maxTarget = seat.streetBet + seat.stack;
-  const fullRaiseTarget = table.currentBet === 0
-    ? table.bigBlind
-    : (table.currentBet < table.bigBlind ? table.bigBlind : table.currentBet + table.lastFullRaise);
-  const raiseAllowed = !table.raiseLocked.includes(seat.index) && maxTarget > table.currentBet;
-  const minTarget = Math.min(maxTarget, fullRaiseTarget);
-  const potAfterCall = table.potTotal + callAmount;
-  const fractionTarget = (fraction) => {
-    const target = table.currentBet === 0
-      ? Math.round(table.potTotal * fraction)
-      : table.currentBet + Math.round(potAfterCall * fraction);
-    return Math.min(maxTarget, Math.max(minTarget, target));
-  };
-  return {
-    callAmount: Math.min(callAmount, seat.stack),
-    canCheck: callAmount === 0,
-    canCall: callAmount > 0 && seat.stack > 0,
-    canBet: table.currentBet === 0 && raiseAllowed,
-    canRaise: table.currentBet > 0 && raiseAllowed,
-    canAllIn: seat.stack > 0,
-    minTarget,
-    maxTarget,
-    thirdPotTarget: fractionTarget(1 / 3),
-    halfPotTarget: fractionTarget(1 / 2),
-    threeQuarterPotTarget: fractionTarget(3 / 4),
-    potTarget: fractionTarget(1),
-    showRaiseControls: raiseAllowed
-  };
-}
-
-function currentVisualSnapshot(table) {
-  return {
-    handNumber: table.handNumber,
-    status: table.status,
-    communityLength: table.community?.length ?? 0,
-    potTotal: table.potTotal ?? 0,
-    seatBets: (table.seats ?? []).map((seat) => seat ? `${seat.streetBet}:${seat.handCommitted}:${seat.stack}` : ""),
-    currentSeat: table.currentSeat,
-    latestLogId: table.log?.[0]?.id ?? null,
-    latestLogType: table.log?.[0]?.type ?? null
-  };
+  if (hidden) return { hidden: true, rank: "", symbol: "", red: false, label: game.i18n.localize("FBLPoker.Table.HiddenCard") };
+  return { ...cardDisplay(card), hidden: false, label: `${cardDisplay(card).rank} ${game.i18n.localize(`FBLPoker.Suits.${card.slice(-1)}`)}` };
 }
 
 export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
@@ -100,27 +57,29 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
   constructor({ tableId, ...options } = {}) {
     super({ id: `fbl-poker-table-${tableId}`, ...options });
     this.tableId = tableId;
-    this._stateHook = () => this.render();
+    this._stateHook = (_tables, changes) => {
+      if (changes?.changedTableIds && !changes.changedTableIds.has(this.tableId) && !changes.deletedTableIds?.has(this.tableId)) return;
+      this.render();
+    };
     this._privateHook = (data) => {
       if (data.tableId !== this.tableId) return;
       const table = getPokerSocket().getTable(this.tableId);
       if (!table || table.handNumber !== data.handNumber) return;
-      const animation = this._dealAnimation?.handNumber === data.handNumber ? this._dealAnimation : null;
-      const remaining = animation ? Math.max(0, animation.duration - (Date.now() - animation.startedAt)) : 0;
-      clearTimeout(this._privateRenderTimer);
-      if (remaining > 0) {
-        this._privateRenderTimer = setTimeout(() => this.render(), remaining + 20);
-      } else {
-        this.render();
-      }
+      this.render();
     };
     this._countdownTimer = null;
-    this._visualSnapshot = null;
     this._pendingSoundEvents = [];
-    this._dealAnimation = null;
-    this._privateRenderTimer = null;
+    this._presentation = new TablePresentation();
+    this._resultRenderTimer = null;
+    this._resizeObserver = null;
+    this._turnSoundController = new AbortController();
+    this._motionPreference = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
+    this._motionChanged = () => this.render();
     this._dismissContextMenu = null;
     this.logCollapsed = false;
+    this._soundController = new AbortController();
+    this._actionPending = false;
+    this._raiseDraft = null;
   }
 
   get title() {
@@ -153,49 +112,45 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
   async _prepareContext(options) {
     const context = await super._prepareContext(options);
     const table = getPokerSocket().getTable(this.tableId);
-    if (!table) return { missing: true };
+    if (!table) {
+      this._soundController.abort();
+      this._turnSoundController.abort();
+      this._pendingSoundEvents = [];
+      this._presentation = new TablePresentation();
+      return { missing: true };
+    }
 
     const active = ACTIVE_STREETS.has(table.status);
-    const previousVisual = this._visualSnapshot;
-    const nextVisual = currentVisualSnapshot(table);
-    const dealNewHand = Boolean(previousVisual && nextVisual.handNumber > previousVisual.handNumber && active);
-    const newCommunityFrom = previousVisual?.handNumber === nextVisual.handNumber
-      ? previousVisual.communityLength
-      : nextVisual.communityLength;
-    const potAnimated = Boolean(previousVisual && previousVisual.potTotal !== nextVisual.potTotal);
-    const winningSeats = new Set((table.status === TABLE_STATUS.COMPLETE ? table.lastResult?.awards : [])?.map((award) => award.seatIndex) ?? []);
+    const socket = getPokerSocket();
+    const presentation = this._presentation.update(table, {
+      reducedMotion: this._motionPreference?.matches ?? false,
+      ownTurn: table.seats[table.currentSeat]?.userId === game.user.id && !socket.isAutomatedSeat(table.id, table.currentSeat)
+    });
+    if (presentation.cancelSounds) {
+      this._soundController.abort();
+      this._soundController = new AbortController();
+      this._pendingSoundEvents = [];
+    }
+    if (presentation.cancelTurn) {
+      this._turnSoundController.abort();
+      this._turnSoundController = new AbortController();
+      this._pendingSoundEvents = this._pendingSoundEvents.filter(event => !event.turn);
+    }
+    this._pendingSoundEvents.push(...presentation.sounds);
+    const effect = key => this._presentation.effect(key);
+    const potAnimated = Boolean(effect("pot"));
+    const winningSeats = new Set((table.status === TABLE_STATUS.COMPLETE && !presentation.resultPending ? table.lastResult?.awards : [])?.filter((award) => {
+      const actorId = award.actorId ?? table.handHistory?.find(hand => hand.handNumber === table.handNumber)?.participants?.find(p => p.seatIndex === award.seatIndex)?.actorId;
+      return actorId && table.seats[award.seatIndex]?.actorId === actorId;
+    }).map((award) => award.seatIndex) ?? []);
     const optionalRevealSeats = new Set(
       table.status === TABLE_STATUS.COMPLETE && table.lastResult?.type === "uncontested"
         ? (table.lastResult.awards ?? []).map((award) => award.seatIndex)
         : []
     );
-    const inHandIndices = table.seats.filter((seat) => seat?.inHand).map((seat) => seat.index);
-    const inHandSet = new Set(inHandIndices);
-    const dealOrder = [];
-    const dealerStart = Number.isInteger(table.dealerIndex) ? table.dealerIndex : -1;
-    for (let step = 1; step <= table.maxSeats; step += 1) {
-      const seatIndex = (dealerStart + step + table.maxSeats) % table.maxSeats;
-      if (inHandSet.has(seatIndex)) dealOrder.push(seatIndex);
-    }
-    const dealOrderPosition = new Map(dealOrder.map((seatIndex, position) => [seatIndex, position]));
-    const dealDuration = Math.max(700, dealOrder.length * 2 * 140 + 560);
-    if (dealNewHand) {
-      this._dealAnimation = { handNumber: table.handNumber, startedAt: Date.now(), duration: dealDuration };
-    }
-    const dealAnimation = this._dealAnimation?.handNumber === table.handNumber
-      && (Date.now() - this._dealAnimation.startedAt) < this._dealAnimation.duration
-      ? this._dealAnimation
-      : null;
-    const dealElapsed = dealAnimation ? Math.max(0, Date.now() - dealAnimation.startedAt) : 0;
-    if (!dealAnimation) this._dealAnimation = null;
-    this._pendingSoundEvents = this.#transitionSoundEvents(previousVisual, nextVisual, table, dealOrder.length);
-    const socket = getPokerSocket();
-
     const seatViews = table.seats.map((seat, index) => {
-      const { angle, left, top } = seatEllipsePosition(index, table.maxSeats);
-      const dealX = Math.round((-Math.cos(angle) * 420) - 108);
-      const dealY = Math.round((-Math.sin(angle) * 290) - 108);
-      const style = `left:${left}%;top:${top}%;--deal-x:${dealX}px;--deal-y:${dealY}px`;
+      const { left, top } = seatEllipsePosition(index, table.maxSeats);
+      const style = `left:${left}%;top:${top}%`;
       if (!seat) return { index, empty: true, style, canJoin: !active };
 
       const automated = socket.isAutomatedSeat(table.id, index);
@@ -205,13 +160,14 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
       const rawCards = visibleCards.length
         ? visibleCards.map((card) => cardView(card))
         : Array.from({ length: seat.cardsCount || (seat.inHand ? 2 : 0) }, () => cardView(null, true));
-      const dealPosition = dealOrderPosition.get(index) ?? 0;
       const cards = rawCards.map((card, cardIndex) => {
-        const scheduledDelay = ((cardIndex * Math.max(1, dealOrder.length)) + dealPosition) * 140;
+        const key = `hole:${index}:${cardIndex}`;
+        const animation = effect(key);
         return {
           ...card,
-          animateDeal: Boolean(dealAnimation && seat.inHand),
-          dealDelay: Math.max(0, scheduledDelay - dealElapsed)
+          effectKey: key,
+          animateDeal: Boolean(animation),
+          dealDelay: animation?.delay ?? 0
         };
       });
       const canManage = ownSeat || game.user.isGM;
@@ -220,7 +176,7 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
         && table.status === TABLE_STATUS.COMPLETE
         && optionalRevealSeats.has(index)
         && seat.cardsCount > 0;
-      const chipAnimated = Boolean(previousVisual && previousVisual.seatBets[index] !== nextVisual.seatBets[index]);
+      const chipAnimated = Boolean(effect(`chips:${index}`));
 
       const betPlacement = Math.abs(left - 50) < 8
         ? (top < 50 ? "below-center" : "above-center")
@@ -257,45 +213,57 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
       : null;
     const actingSeat = table.currentSeat === null ? null : table.seats[table.currentSeat];
     const actingSeatAutomated = table.currentSeat === null ? false : socket.isAutomatedSeat(table.id, table.currentSeat);
-    const canActForSeat = actingSeat && !actingSeatAutomated && (actingSeat.userId === game.user.id || game.user.isGM);
-    const legal = canActForSeat ? legalActions(table, actingSeat) : null;
-    const eligibleCount = table.seats.filter((seat) => seat && !seat.sittingOut && !seat.leaveAfterHand && seat.stack > 0).length;
+    const canActForSeat = actingSeat && !actingSeatAutomated && socket.hasAutomationInfo?.(table.id) !== false && (actingSeat.userId === game.user.id || game.user.isGM);
+    const availableLegal = legalActions(table, actingSeat);
+    const legal = canActForSeat ? availableLegal : null;
+    const eligibleCount = table.seats.filter((seat) => seat && !seat.sittingOut && !seat.leaveAfterHand && !seat.sitOutAfterHand && seat.stack > 0).length;
 
     const community = Array.from({ length: 5 }, (_, index) => {
       if (!table.community[index]) return { empty: true };
       return {
         ...cardView(table.community[index]),
-        animateDeal: Boolean(previousVisual && index >= newCommunityFrom),
-        dealDelay: Math.max(0, index - newCommunityFrom) * 100
+        effectKey: `board:${index}`,
+        animateDeal: Boolean(effect(`board:${index}`)),
+        dealDelay: effect(`board:${index}`)?.delay ?? 0
       };
     });
 
     const logs = (table.log ?? []).slice(0, 35).map((entry) => {
-      const seat = entry.seatIndex === null ? null : table.seats[entry.seatIndex];
+      const legacyHand = table.handHistory?.find((hand) => hand.handNumber === entry.handNumber || hand.actions?.some((action) => action.id === entry.id));
+      const legacyActor = legacyHand?.participants?.find((participant) => participant.seatIndex === entry.seatIndex);
       let text = game.i18n.localize(`FBLPoker.Log.${entry.type}`);
       if (text === `FBLPoker.Log.${entry.type}`) text = actionLabel(entry.type);
+      if (entry.type === "street" && typeof entry.amount === "string") text += `: ${game.i18n.localize(`FBLPoker.Status.${entry.amount}`)}`;
       return {
         id: entry.id,
-        actorName: seat?.actorName ?? "",
+        actorName: entry.actorName ?? legacyActor?.actorName ?? "",
         text,
         amount: typeof entry.amount === "number" ? entry.amount : null
       };
     });
 
     const awardTotals = new Map();
-    for (const award of (table.status === TABLE_STATUS.COMPLETE ? table.lastResult?.awards : []) ?? []) {
-      const current = awardTotals.get(award.seatIndex) ?? { seatIndex: award.seatIndex, amount: 0, categoryName: award.categoryName ?? null };
+    for (const award of (table.status === TABLE_STATUS.COMPLETE && !presentation.resultPending ? table.lastResult?.awards : []) ?? []) {
+      const current = awardTotals.get(award.seatIndex) ?? { seatIndex: award.seatIndex, actorName: award.actorName, amount: 0, categoryName: award.categoryName ?? null };
       current.amount += Number(award.amount) || 0;
       if (!current.categoryName && award.categoryName) current.categoryName = award.categoryName;
       awardTotals.set(award.seatIndex, current);
     }
     const resultAwards = [...awardTotals.values()].map((award) => ({
       ...award,
-      actorName: table.seats[award.seatIndex]?.actorName ?? "?",
+      actorName: award.actorName ?? table.handHistory?.find((hand) => hand.handNumber === table.handNumber)?.participants?.find((p) => p.seatIndex === award.seatIndex)?.actorName ?? "?",
       categoryLabel: award.categoryName ? game.i18n.localize(`FBLPoker.Hands.${award.categoryName}`) : ""
     }));
 
+    const draftKey = JSON.stringify([table.handNumber, table.status, table.currentSeat, actingSeat?.actorId, availableLegal?.minTarget, availableLegal?.maxTarget]);
+    if (draftKey !== this._raiseDraft?.key) this._raiseDraft = { key: draftKey, value: legal?.minTarget };
     Object.assign(context, {
+      expected: { handNumber: table.handNumber, status: table.status, revision: table.revision },
+      raiseValue: this._raiseDraft.value,
+      actionPending: this._actionPending,
+      blockedMessage: table.recoveryRequired ? game.i18n.localize("FBLPoker.Errors.RecoveryRequired") : table.deliveryPending ? game.i18n.localize("FBLPoker.Table.WaitingForCards") : "",
+      displayedPot: table.status === TABLE_STATUS.COMPLETE ? (table.lastResult?.potTotal ?? table.handHistory?.[0]?.potTotal ?? 0) : table.potTotal,
+      potLabel: game.i18n.localize(table.status === TABLE_STATUS.COMPLETE ? "FBLPoker.Table.AwardedPot" : "FBLPoker.Table.Pot"),
       missing: false,
       table,
       isGM: game.user.isGM,
@@ -316,73 +284,91 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
       canForceReset: game.user.isGM && active,
       canEdit: game.user.isGM && !active,
       resultAwards,
-      hasResult: resultAwards.length > 0,
+      hasResult: resultAwards.length > 0 && !presentation.resultPending,
       historyCount: table.handHistory?.length ?? 0,
       logCollapsed: this.logCollapsed,
-      deckDealing: Boolean(dealAnimation),
-      deckDealDuration: dealAnimation ? Math.max(280, dealAnimation.duration - dealElapsed) : 500,
+      deckDealing: Boolean(effect("deck")),
+      deckDealCycles: (effect("deck")?.duration ?? 0) / PRESENTATION.deckCycle,
       autoNextWaiting: table.status === TABLE_STATUS.COMPLETE && table.autoNextHand && Boolean(table.nextHandDeadline),
       potAnimated
     });
 
-    this._visualSnapshot = nextVisual;
     return context;
   }
 
   async _onFirstRender(context, options) {
     await super._onFirstRender(context, options);
+    if (this._soundController.signal.aborted) this._soundController = new AbortController();
+    if (this._turnSoundController.signal.aborted) this._turnSoundController = new AbortController();
+    this._motionPreference?.addEventListener("change", this._motionChanged);
     Hooks.on("fblPokerStateUpdated", this._stateHook);
     Hooks.on("fblPokerPrivateUpdated", this._privateHook);
   }
 
   async _onRender(context, options) {
     await super._onRender(context, options);
+    this._renderedAction = { expected: context.expected, seatIndex: context.actingSeat?.index };
     this._syncWindowTitle();
     this.#renderHeaderButtons();
     this.#bindSeatContextMenus();
+    this.#syncPresentation();
     this.#playPendingSounds();
     clearInterval(this._countdownTimer);
+    this._countdownTimer = null;
+
+    const timer = this.element?.querySelector?.("[data-turn-timer]");
+    const autoNext = this.element?.querySelector?.("[data-auto-next-countdown]");
+    const secondsElement = timer?.querySelector?.("[data-turn-timer-seconds]") ?? null;
+    const barElement = timer?.querySelector?.("[data-turn-timer-bar]") ?? null;
 
     const updateTimer = () => {
       const table = getPokerSocket().getTable(this.tableId);
-      const timer = this.element?.querySelector?.("[data-turn-timer]");
-      const autoNext = this.element?.querySelector?.("[data-auto-next-countdown]");
       if (autoNext) {
-        const remaining = table?.nextHandDeadline ? Math.max(0, Math.ceil((table.nextHandDeadline - Date.now()) / 1000)) : 0;
+        const remaining = table?.nextHandDeadline ? Math.max(0, Math.ceil(Math.min(table.autoNextHandSeconds * 1000, table.nextHandDeadline - getPokerSocket().hostNow()) / 1000)) : 0;
         autoNext.textContent = String(remaining);
       }
-      if (!timer) return;
-      const secondsElement = timer.querySelector("[data-turn-timer-seconds]");
-      const barElement = timer.querySelector("[data-turn-timer-bar]");
-      if (!table?.turnDeadline || table.currentSeat === null || table.paused) {
-        timer.classList.add("is-hidden");
-        if (secondsElement) secondsElement.textContent = "–";
-        if (barElement) {
-          barElement.style.width = "0%";
-          barElement.style.background = "hsl(0 72% 46%)";
+      if (timer) {
+        if (!table?.turnDeadline || table.currentSeat === null || table.paused) {
+          timer.classList.add("is-hidden");
+          if (secondsElement) secondsElement.textContent = "–";
+          if (barElement) {
+            barElement.style.width = "0%";
+            barElement.style.background = "hsl(0 72% 46%)";
+          }
+        } else {
+          const totalMs = Math.max(1000, Number(table.actionSeconds || 0) * 1000);
+          const remainingMs = Math.max(0, table.turnDeadline - getPokerSocket().hostNow());
+          const ratio = Math.max(0, Math.min(1, remainingMs / totalMs));
+          const seconds = Math.max(0, Math.ceil(Math.min(totalMs, remainingMs) / 1000));
+          const hue = Math.round(ratio * 120);
+          timer.classList.remove("is-hidden");
+          if (secondsElement) secondsElement.textContent = String(seconds);
+          if (barElement) {
+            barElement.style.width = `${Math.max(2, ratio * 100)}%`;
+            barElement.style.background = `hsl(${hue} 72% 46%)`;
+          }
         }
-        return;
       }
-      const totalMs = Math.max(1000, Number(table.actionSeconds || 0) * 1000);
-      const remainingMs = Math.max(0, table.turnDeadline - Date.now());
-      const ratio = Math.max(0, Math.min(1, remainingMs / totalMs));
-      const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
-      const hue = Math.round(ratio * 120);
-      timer.classList.remove("is-hidden");
-      if (secondsElement) secondsElement.textContent = String(seconds);
-      if (barElement) {
-        barElement.style.width = `${Math.max(2, ratio * 100)}%`;
-        barElement.style.background = `hsl(${hue} 72% 46%)`;
+
+      const now = getPokerSocket().hostNow();
+      const hasActiveDeadline = (table?.turnDeadline ?? 0) > now || (table?.nextHandDeadline ?? 0) > now;
+      if (!hasActiveDeadline && this._countdownTimer) {
+        clearInterval(this._countdownTimer);
+        this._countdownTimer = null;
       }
     };
     updateTimer();
-    this._countdownTimer = setInterval(updateTimer, 250);
+    const timerTable = getPokerSocket().getTable(this.tableId);
+    const now = getPokerSocket().hostNow();
+    if ((timerTable?.turnDeadline ?? 0) > now || (timerTable?.nextHandDeadline ?? 0) > now) {
+      this._countdownTimer = setInterval(updateTimer, 250);
+    }
 
     const numberInput = this.element?.querySelector?.('[name="raiseAmount"]');
     const rangeInput = this.element?.querySelector?.('[name="raiseRange"]');
     if (numberInput && rangeInput) {
-      const syncNumber = () => { numberInput.value = rangeInput.value; };
-      const syncRange = () => { rangeInput.value = numberInput.value; };
+      const syncNumber = () => { numberInput.value = rangeInput.value; this._raiseDraft.value = numberInput.value; };
+      const syncRange = () => { rangeInput.value = numberInput.value; this._raiseDraft.value = numberInput.value; };
       rangeInput.addEventListener("input", syncNumber);
       numberInput.addEventListener("input", syncRange);
     }
@@ -398,17 +384,18 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
     if (!table) return;
 
     const active = ACTIVE_STREETS.has(table.status);
-    const eligibleCount = table.seats.filter((seat) => seat && !seat.sittingOut && !seat.leaveAfterHand && seat.stack > 0).length;
+    const eligibleCount = table.seats.filter((seat) => seat && !seat.sittingOut && !seat.leaveAfterHand && !seat.sitOutAfterHand && seat.stack > 0).length;
     const container = document.createElement("div");
     container.className = "fbl-poker-header-inline";
 
     const actions = [];
     if (game.user.isGM) {
+      if (table.recoveryRequired) actions.push({ icon: "fa-solid fa-scale-balanced", title: game.i18n.localize("FBLPoker.Recovery.Title"), onClick: () => PokerTableApp.reconcile.call(this) });
       actions.push(
         {
           icon: "fa-solid fa-play",
           title: game.i18n.localize("FBLPoker.Table.StartHand"),
-          disabled: active || eligibleCount < 2,
+          disabled: active || table.recoveryRequired || eligibleCount < 2,
           className: "start",
           onClick: () => PokerTableApp.startHand.call(this)
         },
@@ -461,6 +448,7 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
       button.type = "button";
       button.className = `header-control icon fbl-poker-header-icon ${action.className ?? ""}`.trim();
       button.title = action.title;
+      button.setAttribute("aria-label", action.title);
       button.disabled = Boolean(action.disabled);
       button.innerHTML = `<i class="${action.icon}"></i>`;
       button.addEventListener("click", (event) => {
@@ -597,55 +585,44 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
     });
   }
 
-  #transitionSoundEvents(previous, next, table, dealSeatCount) {
-    if (!previous) return [];
-    const events = [];
-    const newHand = next.handNumber > previous.handNumber && ACTIVE_STREETS.has(table.status);
-    if (newHand) {
-      const count = Math.max(0, dealSeatCount * 2);
-      if (count) events.push({ id: "holeDeal", count, interval: 140, delay: 0 });
-    } else if (next.handNumber === previous.handNumber && next.communityLength > previous.communityLength) {
-      events.push({ id: "communityDeal", count: next.communityLength - previous.communityLength, interval: 120, delay: 0 });
-    }
-
-    const latestLog = table.log?.[0];
-    if (latestLog?.id && latestLog.id !== previous.latestLogId) {
-      if (["smallBlind", "bigBlind", "ante", "call", "bet", "raise"].includes(latestLog.type)) {
-        events.push({ id: "chips", count: 1, delay: newHand ? Math.max(0, dealSeatCount * 280) : 0 });
-      } else if (latestLog.type === "allIn") {
-        events.push({ id: "allIn", count: 1, delay: 0 });
-      } else if (latestLog.type === "fold") {
-        events.push({ id: "fold", count: 1, delay: 0 });
-      } else if (latestLog.type === "check") {
-        events.push({ id: "check", count: 1, delay: 0 });
+  #syncPresentation() {
+    const now = Date.now();
+    for (const element of this.element?.querySelectorAll?.("[data-poker-effect]") ?? []) {
+      const effect = this._presentation.effect(element.dataset.pokerEffect, now);
+      if (!effect) {
+        element.classList.remove("is-dealing", "is-animated");
+        continue;
       }
+      element.style.setProperty("--effect-delay", `${effect.delay}ms`);
+      element.style.setProperty("--effect-duration", `${effect.duration}ms`);
     }
-
-    if (previous.status !== TABLE_STATUS.COMPLETE && next.status === TABLE_STATUS.COMPLETE) {
-      events.push({ id: "win", count: 1, delay: 220 });
+    positionCardOrigins(this.element);
+    if (!this._resizeObserver && globalThis.ResizeObserver && this.element) {
+      this._resizeObserver = new ResizeObserver(() => positionCardOrigins(this.element));
+      this._resizeObserver.observe(this.element);
     }
-
-    if (next.currentSeat !== previous.currentSeat && next.currentSeat !== null) {
-      const actingSeat = table.seats?.[next.currentSeat];
-      const automated = getPokerSocket().isAutomatedSeat(table.id, next.currentSeat);
-      if (actingSeat?.userId === game.user.id && !automated) {
-        const delay = newHand ? Math.max(0, dealSeatCount * 280 + 180) : 80;
-        events.push({ id: "turn", count: 1, delay });
-      }
-    }
-    return events;
+    clearTimeout(this._resultRenderTimer);
+    const remaining = this._presentation.resultAt - now;
+    if (remaining > 0) this._resultRenderTimer = setTimeout(() => this.render(), remaining + 1);
   }
 
   #playPendingSounds() {
-    const events = this._pendingSoundEvents.splice(0);
-    for (const event of events) {
-      PokerSoundService.playSequence(event.id, event.count ?? 1, event.interval ?? 120, event.delay ?? 0);
+    for (const event of this._pendingSoundEvents.splice(0)) {
+      const signal = event.turn ? this._turnSoundController.signal : this._soundController.signal;
+      PokerSoundService.playSequence(event.id, 1, 0, Math.max(0, event.at - Date.now()), signal);
     }
   }
 
   async _onClose(options) {
     clearInterval(this._countdownTimer);
-    clearTimeout(this._privateRenderTimer);
+    this._soundController.abort();
+    this._pendingSoundEvents = [];
+    this._turnSoundController.abort();
+    clearTimeout(this._resultRenderTimer);
+    this._resizeObserver?.disconnect();
+    this._resizeObserver = null;
+    this._presentation = new TablePresentation();
+    this._motionPreference?.removeEventListener("change", this._motionChanged);
     this._dismissContextMenu?.();
     this._dismissContextMenu = null;
     Hooks.off("fblPokerStateUpdated", this._stateHook);
@@ -658,6 +635,7 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   static async cashOut(_event, target) {
+    const expected = getPokerSocket().expectedState(this.tableId);
     try {
       const confirmed = await foundry.applications.api.DialogV2.confirm({
         window: { title: "FBLPoker.CashOut.Title" },
@@ -666,6 +644,7 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
       });
       if (!confirmed) return;
       await getPokerSocket().request(REQUEST.CASH_OUT, {
+        expected,
         tableId: this.tableId,
         seatIndex: Number(target.dataset.seatIndex)
       });
@@ -713,21 +692,25 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   static async pokerAction(_event, target) {
+    if (this._actionPending || !this._renderedAction?.expected) return;
+    this._actionPending = true;
+    this.element?.querySelectorAll?.('[data-action="pokerAction"]').forEach((button) => { button.disabled = true; });
+    const rendered = this._renderedAction;
     try {
       const action = target.dataset.actionType;
       const amount = action === ACTIONS.BET || action === ACTIONS.RAISE
         ? parseStrictInteger(this.element.querySelector('[name="raiseAmount"]')?.value, "FBLPoker.Errors.InvalidBet")
         : null;
-      const table = getPokerSocket().getTable(this.tableId);
       await getPokerSocket().request(REQUEST.ACTION, {
         tableId: this.tableId,
-        seatIndex: table.currentSeat,
+        expected: rendered.expected,
+        seatIndex: rendered.seatIndex,
         action,
         amount
       });
     } catch (error) {
       notifyError(error);
-    }
+    } finally { this._actionPending = false; this.render(); }
   }
 
   static quickAmount(_event, target) {
@@ -735,6 +718,7 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const rangeInput = this.element.querySelector('[name="raiseRange"]');
     if (numberInput) numberInput.value = target.dataset.amount;
     if (rangeInput) rangeInput.value = target.dataset.amount;
+    if (this._raiseDraft) this._raiseDraft.value = target.dataset.amount;
   }
 
   static async toggleCards(_event, target) {
@@ -770,13 +754,14 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   static async forceReset() {
+    const expected = getPokerSocket().expectedState(this.tableId);
     try {
       const confirmed = await foundry.applications.api.DialogV2.confirm({
         window: { title: "FBLPoker.Reset.Title" },
         content: `<p>${game.i18n.localize("FBLPoker.Reset.Confirm")}</p>`,
         modal: true
       });
-      if (confirmed) await getPokerSocket().request(REQUEST.FORCE_RESET, { tableId: this.tableId });
+      if (confirmed) await getPokerSocket().request(REQUEST.FORCE_RESET, { tableId: this.tableId, expected });
     } catch (error) {
       notifyError(error);
     }
@@ -802,6 +787,29 @@ export class PokerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
   static openSoundSettings() {
     if (!game.user.isGM) return;
     new PokerSoundSettingsApp().render({ force: true });
+  }
+
+  static async reconcile() {
+    if (!game.user.isGM) return;
+    try {
+      await getPokerSocket().request(REQUEST.REQUEST_STATE);
+      const pending = Object.values(game.settings.get(MODULE_ID, "moneyJournal") ?? {}).filter((entry) => entry.tableId === this.tableId && entry.status === "pending");
+      if (!pending.length) { ui.notifications?.info(game.i18n.localize("FBLPoker.Recovery.Reload")); return; }
+      for (const entry of pending) {
+        const actor = game.actors.get(entry.actorId);
+        const content = `<p>${escapeHtml(game.i18n.localize("FBLPoker.Recovery.Instructions"))}</p><p>${escapeHtml(actor?.name ?? entry.actorId)} · ${escapeHtml(entry.reason)}<br>${entry.beforeCopper} → ${entry.afterCopper}<br><code>${escapeHtml(entry.id)}</code></p>`;
+        const applied = await foundry.applications.api.DialogV2.wait({
+          window: { title: "FBLPoker.Recovery.Title" }, content, modal: true, rejectClose: false,
+          buttons: [
+            { action: "applied", label: game.i18n.localize("FBLPoker.Recovery.Applied"), callback: () => true },
+            { action: "notApplied", label: game.i18n.localize("FBLPoker.Recovery.NotApplied"), callback: () => false },
+            { action: "cancel", label: game.i18n.localize("FBLPoker.Recovery.Cancel"), default: true, callback: () => null }
+          ]
+        });
+        if (typeof applied !== "boolean") return;
+        await getPokerSocket().request(REQUEST.RESOLVE_MONEY, { operationId: entry.id, applied });
+      }
+    } catch (error) { notifyError(error); }
   }
 
   static async refresh() {

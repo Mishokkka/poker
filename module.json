@@ -1,8 +1,8 @@
 {
   "id": "fbl-poker-table",
   "title": "Forbidden Lands Poker Table",
-  "description": "Server-authoritative Texas Hold'em poker tables for Forbidden Lands, with Actor currency integration.",
-  "version": "1.7.6",
+  "description": "Active-GM-authoritative Texas Hold'em poker tables for Forbidden Lands, with Actor currency integration.",
+  "version": "1.7.12",
   "authors": [
     {
       "name": "Airborne Islands table"

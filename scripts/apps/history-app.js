@@ -39,7 +39,10 @@ export class PokerHistoryApp extends HandlebarsApplicationMixin(ApplicationV2) {
   constructor({ tableId, ...options } = {}) {
     super({ id: `fbl-poker-history-${tableId}`, ...options });
     this.tableId = tableId;
-    this._stateHook = () => this.render();
+    this._stateHook = (_tables, changes) => {
+      if (changes?.historyChangedTableIds && !changes.historyChangedTableIds.has(this.tableId) && !changes.deletedTableIds?.has(this.tableId)) return;
+      this.render();
+    };
   }
 
   get title() {
@@ -62,6 +65,7 @@ export class PokerHistoryApp extends HandlebarsApplicationMixin(ApplicationV2) {
           ...participant,
           cardsView: (participant.cards ?? []).map(cardView),
           delta: participant.endingStack - participant.startingStack,
+          positive: participant.endingStack > participant.startingStack,
           won: (hand.awards ?? []).some((award) => award.seatIndex === participant.seatIndex)
         })),
         awards: (hand.awards ?? []).map((award) => ({
@@ -71,7 +75,7 @@ export class PokerHistoryApp extends HandlebarsApplicationMixin(ApplicationV2) {
         actions: (hand.actions ?? []).map((action) => ({
           ...action,
           actorName: action.seatIndex === null ? "" : (names.get(action.seatIndex) ?? ""),
-          text: localizedAction(action.type)
+          text: localizedAction(action.type) + (action.type === "street" && typeof action.amount === "string" ? `: ${game.i18n.localize(`FBLPoker.Status.${action.amount}`)}` : "")
         }))
       };
     });

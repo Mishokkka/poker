@@ -5,6 +5,7 @@ import { PokerStorage } from "../storage.js";
 import { isHostClient, randomId } from "../util.js";
 import { botThinkDelay, chooseBotAction, normalizeBotLevel, normalizeBotPersonality } from "../bots/bot-player.js";
 import { validateEcdhPublicKey } from "./crypto.js";
+import { presentationDelay } from "../presentation-timing.js";
 
 function safeInteger(value) {
   if (typeof value === "number") return Number.isSafeInteger(value) ? value : null;
@@ -31,7 +32,14 @@ export class PokerHostService {
     this.botTimers = new Map();
     this.autoNextTimers = new Map();
     this.rejectedTables = new Map();
+    this.persistedTables = {};
+    this.persistedHistories = {};
+    this.persistedHistoryRevisions = new Map();
+    this.publishedHistoryRevisions = new Map();
     this.queue = Promise.resolve();
+    this.receipts = new Map();
+    this.moneyJournal = {};
+    this.activeRequest = null;
     this.retiring = false;
     this.stopped = false;
     this.shutdownPromise = null;
@@ -43,28 +51,76 @@ export class PokerHostService {
     this.shutdownPromise = null;
     this.tables.clear();
     this.rejectedTables.clear();
+    this.persistedTables = {};
+    this.persistedHistories = {};
+    this.persistedHistoryRevisions.clear();
+    this.publishedHistoryRevisions.clear();
 
-    const stored = await this.storage.loadTables();
+    const [stored, storedHistories] = await Promise.all([
+      this.storage.loadTables(),
+      this.storage.loadHistories()
+    ]);
     if (this.stopped || this.retiring) return;
 
     const worldSchemaVersion = Number(game.settings.get(MODULE_ID, "schemaVersion")) || 0;
     if (worldSchemaVersion > SCHEMA_VERSION) throw new Error("FBLPoker.Errors.UnsupportedSchema");
 
+    let liveDirty = worldSchemaVersion < SCHEMA_VERSION;
+    let historiesDirty = false;
+
     for (const [id, value] of Object.entries(stored)) {
       try {
-        const migrated = migrateTableState(value, worldSchemaVersion);
+        const archive = this.#historyArchive(storedHistories[id], value?.handHistory);
+        const source = { ...value, handHistory: archive.hands };
+        if (archive.revision !== null && source.historyRevision === undefined) source.historyRevision = archive.revision;
+
+        const migrated = migrateTableState(source, worldSchemaVersion);
         const engine = new PokerTableEngine(migrated);
         engine.rollbackActiveHand();
         this.tables.set(id, engine);
+
+        const legacyEmbeddedHistory = Object.hasOwn(value, "handHistory");
+        const archiveNeedsWrite = archive.fromArchive
+          ? archive.revision !== engine.state.historyRevision
+          : engine.state.historyRevision > 0;
+        const liveState = engine.storageState({ includeHistory: false });
+        const storedLiveState = structuredClone(value);
+        delete storedLiveState.handHistory;
+        if (JSON.stringify(storedLiveState) !== JSON.stringify(liveState)) liveDirty = true;
+        if (archiveNeedsWrite || (legacyEmbeddedHistory && engine.state.historyRevision > 0)) historiesDirty = true;
+
+        this.persistedTables[id] = liveState;
+        this.persistedHistories[id] = { revision: engine.state.historyRevision, hands: engine.historyState() };
+        this.persistedHistoryRevisions.set(id, engine.state.historyRevision);
+        this.publishedHistoryRevisions.set(id, engine.state.historyRevision);
       } catch (error) {
         this.rejectedTables.set(id, structuredClone(value));
+        this.persistedTables[id] = structuredClone(value);
+        if (storedHistories[id] !== undefined) this.persistedHistories[id] = structuredClone(storedHistories[id]);
         console.error(`FBL Poker | Rejected stored table ${id}; original data was preserved`, error);
       }
     }
 
+    // Preserve orphaned archives rather than deleting data during recovery/migration.
+    for (const [id, archive] of Object.entries(storedHistories)) {
+      if (!(id in this.persistedHistories)) this.persistedHistories[id] = structuredClone(archive);
+    }
+
     if (this.stopped || this.retiring) return;
-    for (const engine of this.tables.values()) this.#scheduleAutoNext(engine);
-    await this.persist();
+    for (const engine of this.tables.values()) {
+      const previousDeadline = engine.state.nextHandDeadline;
+      this.#scheduleAutoNext(engine);
+      if (engine.state.nextHandDeadline !== previousDeadline) {
+        this.persistedTables[engine.state.id] = engine.storageState({ includeHistory: false });
+        liveDirty = true;
+      }
+    }
+
+    this.moneyJournal = structuredClone(game.settings.get(MODULE_ID, "moneyJournal") ?? {});
+    await this.#recoverMoney();
+
+    if (historiesDirty) await this.storage.saveHistories(this.persistedHistories);
+    if (liveDirty) await this.storage.saveTables(this.persistedTables);
     if (this.stopped || this.retiring) return;
 
     if (worldSchemaVersion < SCHEMA_VERSION) {
@@ -107,20 +163,22 @@ export class PokerHostService {
   }
 
   async sendPrivateHandsForUser(userId) {
+    const deliveries = [];
     for (const engine of this.tables.values()) {
       if (!engine.isActiveHand) continue;
       for (const { seatIndex, cards } of engine.privateHands()) {
         const seat = engine.state.seats[seatIndex];
         if (seat?.isBot || seat?.userId !== userId) continue;
-        await this.socket.sendPrivate(userId, {
+        deliveries.push(this.socket.sendPrivate(userId, {
           kind: "holeCards",
           tableId: engine.state.id,
           handNumber: engine.state.handNumber,
           seatIndex,
           cards
-        });
+        }));
       }
     }
+    await Promise.all(deliveries);
   }
 
   shutdown() {
@@ -139,12 +197,19 @@ export class PokerHostService {
     return this.shutdownPromise;
   }
 
-  async registerSession(userId, publicKey) {
-    if (this.stopped || this.retiring || !(await validateEcdhPublicKey(publicKey))) return null;
+  async registerSession(userId, publicKey = null) {
+    if (this.stopped || this.retiring) return null;
+    if (publicKey !== null && !(await validateEcdhPublicKey(publicKey))) return null;
     if (this.stopped || this.retiring) return null;
     const user = game.users.get(userId);
-    if (!user) return null;
-    const session = { userId, publicKey: structuredClone(publicKey), token: randomId("session-"), createdAt: Date.now() };
+    if (!user?.active) return null;
+    const session = {
+      userId,
+      publicKey: publicKey === null ? null : structuredClone(publicKey),
+      transport: publicKey === null ? "query" : "ecdh",
+      token: randomId("session-"),
+      createdAt: Date.now()
+    };
     this.sessions.set(userId, session);
     return session;
   }
@@ -156,12 +221,54 @@ export class PokerHostService {
   }
 
   async handle(payload) {
+    this.#validateSession(payload);
+    if (payload.type === REQUEST.REQUEST_STATE) return this.#dispatch(payload);
+    const key = payload.requestId ? `${payload.userId}:${payload.requestId}` : randomId("internal-");
+    const fingerprint = JSON.stringify([payload.type, payload.data]);
+    const receipt = this.receipts.get(key);
+    if (receipt) {
+      if (receipt.fingerprint !== fingerprint) throw new Error("FBLPoker.Errors.InvalidRequest");
+      if (receipt.error) throw new Error(receipt.error);
+      return receipt.value;
+    }
+    const durable = Object.values(this.moneyJournal).find((entry) => entry.requestKey === key);
+    if (durable && durable.fingerprint !== fingerprint) throw new Error("FBLPoker.Errors.InvalidRequest");
+    if (durable?.status === "cancelled") throw new Error("FBLPoker.Errors.InvalidRequest");
+    if (durable?.status === "committed" && [REQUEST.JOIN, REQUEST.TOP_UP, REQUEST.CASH_OUT, REQUEST.LEAVE].includes(payload.type)) return;
+    this.activeRequest = { key, fingerprint };
+    try {
+      if (payload.data?.expected && payload.data.tableId) {
+        const state = this.tables.get(payload.data.tableId)?.state;
+        const expected = payload.data.expected;
+        if (!state || state.handNumber !== expected.handNumber || state.status !== expected.status || state.revision !== expected.revision) {
+          throw new Error("FBLPoker.Errors.StaleRequest");
+        }
+      }
+      const value = await this.#dispatch(payload);
+      this.receipts.set(key, { fingerprint, value });
+      return value;
+    } catch (error) {
+      this.receipts.set(key, { fingerprint, error: error.message });
+      throw error;
+    } finally { this.activeRequest = null; }
+  }
+
+  async #dispatch(payload) {
     if (this.stopped || this.retiring) throw new Error("FBLPoker.Errors.NotReady");
     const session = this.#validateSession(payload);
     const user = game.users.get(session.userId);
     switch (payload.type) {
       case REQUEST.REQUEST_STATE:
-        await this.broadcastAll();
+        await this.#recoverMoney();
+        for (const engine of this.tables.values()) {
+          if (engine.state.deliveryPending) await this.#mutated(engine, { sendHands: true, resetTurn: true });
+        }
+        await this.sendPrivateHandsForUser(user.id);
+        return { kind: "snapshot", ...this.socket.snapshotEnvelope?.(), tables: this.#publicStates(),
+          automation: user.isGM ? this.automationState() : undefined };
+      case REQUEST.RESOLVE_MONEY:
+        this.#requireGM(user);
+        await this.#resolveMoney(user, payload.data);
         return;
       case REQUEST.CREATE_TABLE:
         this.#requireGM(user);
@@ -232,28 +339,111 @@ export class PokerHostService {
     }
   }
 
-  async persist() {
+  async persist(engine = null, { historyChanged = false } = {}) {
     if (this.stopped) return;
-    const data = Object.fromEntries(this.rejectedTables);
-    for (const [id, engine] of this.tables) data[id] = engine.storageState();
-    await this.storage.saveTables(data);
+
+    if (!engine) {
+      const nextTables = Object.fromEntries(this.rejectedTables);
+      const nextHistories = { ...this.persistedHistories };
+      for (const [id, candidate] of this.tables) {
+        nextTables[id] = candidate.storageState({ includeHistory: false });
+        nextHistories[id] = { revision: candidate.state.historyRevision, hands: candidate.historyState() };
+        this.persistedHistoryRevisions.set(id, candidate.state.historyRevision);
+      }
+      this.persistedTables = nextTables;
+      this.persistedHistories = nextHistories;
+      await this.storage.saveHistories(this.persistedHistories);
+      await this.storage.saveTables(this.persistedTables);
+      return;
+    }
+
+    const id = engine.state.id;
+    this.persistedTables[id] = engine.storageState({ includeHistory: false });
+    await this.storage.saveTables(this.persistedTables);
+
+    if (historyChanged) {
+      this.persistedHistories[id] = { revision: engine.state.historyRevision, hands: engine.historyState() };
+      await this.storage.saveHistories(this.persistedHistories);
+      this.persistedHistoryRevisions.set(id, engine.state.historyRevision);
+    }
+  }
+
+  #publicStates() {
+    return [...this.tables.values()].map((engine) => engine.publicState());
   }
 
   async broadcastAll() {
     if (this.stopped) return;
-    const tables = [...this.tables.values()].map((engine) => engine.publicState());
-    await this.socket.publishSnapshot(tables);
+    const tables = this.#publicStates();
+    for (const engine of this.tables.values()) this.publishedHistoryRevisions.set(engine.state.id, engine.state.historyRevision);
+    await this.socket.publishSnapshot(tables, { full: true });
+  }
+
+  async #broadcastTable(engine, { historyChanged = false } = {}) {
+    if (this.stopped) return;
+    const automation = { [engine.state.id]: this.automationState()[engine.state.id] };
+    for (const user of game.users.contents ?? []) {
+      if (user.isGM && user.active && user.id !== game.user.id) void this.socket.sendPrivate(user.id, { kind: "automation", tables: automation }).catch(() => undefined);
+    }
+    const table = engine.publicState({ includeHistory: false });
+    const historyUpdates = [];
+    if (historyChanged) {
+      const hand = engine.state.handHistory.find((entry) => entry.handNumber === engine.state.handNumber) ?? engine.state.handHistory[0] ?? null;
+      if (hand) {
+        historyUpdates.push({
+          tableId: engine.state.id,
+          revision: engine.state.historyRevision,
+          hand: structuredClone(hand)
+        });
+      }
+      this.publishedHistoryRevisions.set(engine.state.id, engine.state.historyRevision);
+    }
+    await this.socket.publishSnapshot([table], { full: false, historyUpdates });
+  }
+
+  async #broadcastDeletion(tableId) {
+    if (this.stopped) return;
+    this.publishedHistoryRevisions.delete(tableId);
+    await this.socket.publishSnapshot([], { full: false, deletedTableIds: [tableId] });
   }
 
   async #mutated(engine, { sendHands = false, resetTurn = false, resetAutoNext = false } = {}) {
-    this.#scheduleTurn(engine, { reset: resetTurn });
-    this.#scheduleAutoNext(engine, { reset: resetAutoNext });
-    await this.persist();
-    // Deliver private cards first so the following public snapshot produces one complete render.
-    // Broadcasting first caused every player client to rebuild the hand twice and replay the deal animation.
-    if (sendHands) await this.#sendPrivateHands(engine);
-    await this.broadcastAll();
+    if (sendHands) {
+      this.#clearTimer(engine.state.id);
+      this.#clearBotTimer(engine.state.id);
+      engine.state.deliveryPending = true;
+      engine.state.turnDeadline = null;
+      try { await this.#sendPrivateHands(engine); engine.state.deliveryPending = false; }
+      catch (error) { console.warn("FBL Poker | Waiting for private-card delivery", error); }
+    }
+    const previous = this.persistedTables[engine.state.id];
+    const carryGrace = previous?.handNumber === engine.state.handNumber
+      && (ACTIVE_STREETS.has(engine.state.status) || (engine.state.status === TABLE_STATUS.COMPLETE && previous.community.length > 0))
+      && !engine.state.paused && !engine.state.deliveryPending && !engine.state.recoveryRequired
+      ? Math.max(0, (previous.turnDeadline ?? 0) - previous.actionSeconds * 1000 - Date.now()) : 0;
+    const grace = Math.max(carryGrace, presentationDelay(previous, engine.state));
+    this.#scheduleTurn(engine, { reset: resetTurn, grace });
+    this.#scheduleAutoNext(engine, { reset: resetAutoNext, grace });
+    const historyChanged = (this.persistedHistoryRevisions.get(engine.state.id) ?? 0) !== engine.state.historyRevision;
+    try { await this.persist(engine, { historyChanged }); }
+    catch (error) {
+      this.#block(engine);
+      await this.#broadcastTable(engine).catch(() => undefined);
+      throw error;
+    }
+    const publishHistory = (this.publishedHistoryRevisions.get(engine.state.id) ?? 0) !== engine.state.historyRevision;
+    // A notification failure cannot roll back a committed game or wallet operation.
+    await this.#broadcastTable(engine, { historyChanged: publishHistory }).catch((error) => console.warn("FBL Poker | Snapshot delivery failed", error));
     this.#scheduleBotTurn(engine);
+  }
+
+  #historyArchive(entry, legacyHands = []) {
+    if (Array.isArray(entry)) return { fromArchive: true, revision: null, hands: entry };
+    if (entry && typeof entry === "object" && !Array.isArray(entry) && Array.isArray(entry.hands)) {
+      const revision = Number.isSafeInteger(entry.revision) && entry.revision >= 0 ? entry.revision : null;
+      return { fromArchive: true, revision, hands: entry.hands };
+    }
+    return { fromArchive: false, revision: null, hands: Array.isArray(legacyHands) ? legacyHands : [] };
   }
 
   async #createTable(data) {
@@ -277,8 +467,8 @@ export class PokerHostService {
     for (const seat of [...engine.state.seats.filter(Boolean)]) {
       try {
         await this.#creditSeat(engine, seat, "tableDeleted");
-        engine.removeSeat(seat.index);
       } catch (error) {
+        if (engine.state.recoveryRequired) throw error;
         failedPayouts.push({ seat, error });
         console.error(`FBL Poker | Could not return chips to ${seat.actorName ?? seat.actorId} while deleting table`, error);
         await this.storage.appendLedger({
@@ -299,19 +489,23 @@ export class PokerHostService {
     }
 
     if (failedPayouts.length) {
-      await this.persist();
-      await this.broadcastAll();
+      await this.persist(engine);
+      await this.#broadcastTable(engine);
       const actors = failedPayouts.map(({ seat }) => seat.actorName ?? seat.actorId).join(", ");
       throw new Error(game.i18n.format("FBLPoker.Errors.TableDeletePayoutFailed", { actors }));
     }
 
     this.tables.delete(tableId);
     this.rejectedTables.delete(tableId);
+    delete this.persistedTables[tableId];
+    delete this.persistedHistories[tableId];
+    this.persistedHistoryRevisions.delete(tableId);
     this.#clearTimer(tableId);
     this.#clearBotTimer(tableId);
     this.#clearAutoNextTimer(tableId);
-    await this.persist();
-    await this.broadcastAll();
+    await this.storage.saveHistories(this.persistedHistories);
+    await this.storage.saveTables(this.persistedTables);
+    await this.#broadcastDeletion(tableId);
   }
 
   async #join(user, data) {
@@ -340,40 +534,14 @@ export class PokerHostService {
     if (!Number.isSafeInteger(cost)) throw new Error("FBLPoker.Errors.InvalidCurrencyChange");
     const balance = this.currency.balance(actor);
     const isBot = Boolean(botLevel);
-    const chargedCost = user.isGM && isBot ? Math.min(cost, balance.totalCopper) : cost;
-    const transaction = await this.currency.change(actor, -chargedCost, {
-      reason: chargedCost < cost ? "pokerBotBuyInGMOverride" : "pokerBuyIn",
-      tableId: engine.state.id
+    // A GM may grant the missing buy-in to any seat, regardless of its controller.
+    const chargedCost = user.isGM ? Math.min(cost, balance.totalCopper) : cost;
+    const target = new PokerTableEngine(engine.storageState());
+    target.addSeat(seatIndex, {
+      userId: user.id, actorId: actor.id, actorName: actor.name, actorImg: actor.img,
+      stack: buyIn, isBot, botLevel, botPersonality: botLevel ? (botPersonality ?? "calm") : null
     });
-    let seated = false;
-    try {
-      engine.addSeat(seatIndex, {
-        userId: user.id,
-        actorId: actor.id,
-        actorName: actor.name,
-        actorImg: actor.img,
-        stack: buyIn,
-        isBot,
-        botLevel,
-        botPersonality: botLevel ? (botPersonality ?? "calm") : null
-      });
-      seated = true;
-      await this.#mutated(engine);
-    } catch (error) {
-      if (seated && engine.state.seats[seatIndex]?.actorId === actor.id) {
-        engine.state.seats[seatIndex] = null;
-        engine.touch();
-        await this.persist().catch(() => undefined);
-        await this.broadcastAll().catch(() => undefined);
-      }
-      if (chargedCost > 0) {
-        await this.currency.change(actor, chargedCost, { reason: "pokerBuyInRollback", tableId: engine.state.id });
-      }
-      throw error;
-    }
-    await this.#recordTransaction(engine, actor, user, "buyIn", transaction).catch((error) => {
-      console.error("FBL Poker | Could not append buy-in ledger entry", error);
-    });
+    await this.#money(engine, target, actor, user, -chargedCost, "buyIn", { subsidyCopper: cost - chargedCost });
   }
 
   async #moveSeat(user, data) {
@@ -400,17 +568,10 @@ export class PokerHostService {
     if (chips === null || chips < 1) throw new Error("FBLPoker.Errors.InvalidTopUp");
     if ((seat.stack + chips) > engine.state.maxBuyIn) throw new Error("FBLPoker.Errors.TopUpLimit");
     const cost = chips * engine.state.chipValueCopper;
-    const transaction = await this.currency.change(actor, -cost, { reason: "pokerTopUp", tableId: engine.state.id });
-    try {
-      engine.addChips(seat.index, chips);
-      await this.#mutated(engine);
-    } catch (error) {
-      await this.currency.change(actor, cost, { reason: "pokerTopUpRollback", tableId: engine.state.id });
-      throw error;
-    }
-    await this.#recordTransaction(engine, actor, user, "topUp", transaction).catch((error) => {
-      console.error("FBL Poker | Could not append top-up ledger entry", error);
-    });
+    if (!this.currency.actorOwnedBy(actor, user)) throw new Error("FBLPoker.Errors.ActorNotOwned");
+    const target = new PokerTableEngine(engine.storageState());
+    target.addChips(seat.index, chips);
+    await this.#money(engine, target, actor, user, -cost, "topUp");
   }
 
   async #cashOut(user, data) {
@@ -418,18 +579,109 @@ export class PokerHostService {
     const seat = this.#ownedSeat(engine, user, data.seatIndex);
     if (engine.isActiveHand) throw new Error("FBLPoker.Errors.HandInProgress");
     await this.#creditSeat(engine, seat, "cashOut");
-    engine.removeSeat(seat.index);
-    await this.#mutated(engine);
   }
 
   async #creditSeat(engine, seat, reason) {
     const actor = game.actors.get(seat.actorId);
     if (!actor) throw new Error("FBLPoker.Errors.ActorMissing");
-    const amount = seat.stack * engine.state.chipValueCopper;
-    const transaction = await this.currency.change(actor, amount, { reason, tableId: engine.state.id });
-    await this.#recordTransaction(engine, actor, game.users.get(seat.userId), reason, transaction).catch((error) => {
-      console.error("FBL Poker | Could not append cash-out ledger entry", error);
-    });
+    const target = new PokerTableEngine(engine.storageState());
+    target.removeSeat(seat.index);
+    await this.#money(engine, target, actor, game.users.get(seat.userId), seat.stack * engine.state.chipValueCopper, reason);
+  }
+
+  async #saveJournal() {
+    await game.settings.set(MODULE_ID, "moneyJournal", structuredClone(this.moneyJournal));
+  }
+
+  #block(engine) {
+    if (!engine.state.recoveryRequired) engine.touch();
+    engine.state.recoveryRequired = true;
+    engine.state.turnDeadline = null;
+    engine.state.nextHandDeadline = null;
+    this.#clearTimer(engine.state.id);
+    this.#clearBotTimer(engine.state.id);
+    this.#clearAutoNextTimer(engine.state.id);
+  }
+
+  async #money(engine, target, actor, user, delta, reason, extra = {}) {
+    if (Object.values(this.moneyJournal).some((entry) => entry.status === "pending" && (entry.actorId === actor.id || entry.tableId === engine.state.id))) {
+      throw new Error("FBLPoker.Errors.RecoveryRequired");
+    }
+    const before = this.currency.balance(actor).totalCopper;
+    const after = before + delta;
+    if (!Number.isSafeInteger(delta) || !Number.isSafeInteger(after)) throw new Error("FBLPoker.Errors.InvalidCurrencyChange");
+    if (after < 0) throw new Error("FBLPoker.Errors.NotEnoughCurrency");
+    const id = randomId("money-");
+    const entry = { id, status: "pending", at: Date.now(), tableId: engine.state.id, actorId: actor.id,
+      tableName: engine.state.name, actorName: actor.name, currencyRates: this.currency.rates, chipValueCopper: engine.state.chipValueCopper,
+      userId: user?.id, reason, beforeCopper: before, afterCopper: after, deltaCopper: delta, ...extra,
+      requestKey: this.activeRequest?.key, fingerprint: this.activeRequest?.fingerprint,
+      beforeState: engine.storageState(), afterState: target.storageState() };
+    this.moneyJournal[id] = entry;
+    try {
+      // Intent is durable before the Actor write; never compensate an ambiguous write.
+      await this.#saveJournal();
+      const walletReason = reason === "buyIn" ? (extra.subsidyCopper > 0 ? "pokerBuyInGMOverride" : "pokerBuyIn") : reason === "topUp" ? "pokerTopUp" : reason;
+      await this.currency.change(actor, delta, { reason: walletReason, tableId: engine.state.id, transactionId: id, expectedBefore: before });
+      await this.#finishMoney(entry, engine, entry.afterState);
+    } catch (error) {
+      this.#block(engine);
+      await this.#broadcastTable(engine).catch(() => undefined);
+      console.error("FBL Poker | Money operation requires reconciliation", id, error);
+      throw new Error("FBLPoker.Errors.RecoveryRequired");
+    }
+    await this.#mutated(engine);
+  }
+
+  async #finishMoney(entry, engine, state, status = "committed") {
+    // Keep the engine instance: its private cards may still be revealed after a hand.
+    const revision = Math.max(state.revision, engine.state.revision + 1);
+    engine.state = structuredClone(state);
+    engine.state.revision = revision;
+    engine.state.updatedAt = Date.now();
+    delete engine.state.recoveryRequired;
+    await this.persist(engine);
+    const compact = { ...entry, status };
+    delete compact.beforeState;
+    delete compact.afterState;
+    this.moneyJournal[entry.id] = compact;
+    try { await this.#saveJournal(); }
+    catch (error) { this.moneyJournal[entry.id] = entry; throw error; }
+    await this.storage.appendLedger(compact).catch((error) => console.error("FBL Poker | Ledger append failed", error));
+  }
+
+  async #recoverMoney() {
+    for (const entry of Object.values(this.moneyJournal)) {
+      if (entry.status !== "pending") continue;
+      const engine = this.tables.get(entry.tableId);
+      if (!engine) continue;
+      const actor = game.actors.get(entry.actorId);
+      if (actor?.flags?.[MODULE_ID]?.moneyTx?.id === entry.id) {
+        try { await this.#finishMoney(entry, engine, entry.afterState); await this.#mutated(engine); }
+        catch (error) { this.#block(engine); console.error("FBL Poker | Recovery write failed", error); }
+      } else this.#block(engine);
+    }
+  }
+
+  async #resolveMoney(user, { operationId, applied }) {
+    const entry = this.moneyJournal[operationId];
+    if (!entry || entry.status !== "pending" || typeof applied !== "boolean") throw new Error("FBLPoker.Errors.InvalidRequest");
+    const engine = this.tables.get(entry.tableId);
+    if (!engine) throw new Error("FBLPoker.Errors.TableMissing");
+    if (!applied && game.actors.get(entry.actorId)?.flags?.[MODULE_ID]?.moneyTx?.id === entry.id) throw new Error("FBLPoker.Errors.InvalidRequest");
+    entry.resolution = { userId: user.id, at: Date.now(), applied };
+    // Explicit GM reconciliation of an ambiguous Actor response; this never writes currency.
+    try { await this.#finishMoney(entry, engine, applied ? entry.afterState : entry.beforeState, applied ? "committed" : "cancelled"); }
+    catch (error) {
+      this.#block(engine);
+      await this.#broadcastTable(engine).catch(() => undefined);
+      throw new Error("FBLPoker.Errors.RecoveryRequired", { cause: error });
+    }
+    await this.#mutated(engine);
+  }
+
+  automationState() {
+    return Object.fromEntries([...this.tables].map(([id, engine]) => [id, { revision: engine.state.revision, seats: engine.state.seats.filter((seat) => seat?.isBot).map((seat) => seat.index) }]));
   }
 
   async #setSittingOut(user, data, value) {
@@ -457,6 +709,7 @@ export class PokerHostService {
     const engine = this.#table(tableId);
     this.#clearAutoNextTimer(tableId);
     engine.state.nextHandDeadline = null;
+    engine.state.currencyRates = this.currency.rates;
     engine.startHand();
     await this.#mutated(engine, { sendHands: true, resetTurn: true });
   }
@@ -502,12 +755,13 @@ export class PokerHostService {
       if (seat.leaveAfterHand) {
         try {
           await this.#creditSeat(engine, seat, "leaveAfterHand");
-          engine.removeSeat(seat.index);
           changed = true;
         } catch (error) {
+          if (engine.state.recoveryRequired) throw error;
           console.error("FBL Poker | Deferred cash-out failed", error);
-          seat.leaveAfterHand = false;
-          seat.sittingOut = true;
+          const retained = engine.state.seats[seat.index];
+          retained.leaveAfterHand = false;
+          retained.sittingOut = true;
           engine.touch();
           changed = true;
         }
@@ -520,31 +774,33 @@ export class PokerHostService {
   }
 
   async #sendPrivateHands(engine) {
+    const deliveries = [];
     for (const { seatIndex, cards } of engine.privateHands()) {
       const seat = engine.state.seats[seatIndex];
       if (!seat || seat.isBot) continue;
-      await this.socket.sendPrivate(seat.userId, {
+      deliveries.push(this.socket.sendPrivate(seat.userId, {
         kind: "holeCards",
         tableId: engine.state.id,
         handNumber: engine.state.handNumber,
         seatIndex,
         cards
-      });
+      }));
     }
+    await Promise.all(deliveries);
   }
 
-  #scheduleTurn(engine, { reset = false } = {}) {
+  #scheduleTurn(engine, { reset = false, grace = 0 } = {}) {
     this.#clearTimer(engine.state.id);
     if (this.stopped || this.retiring) return;
     this.#clearBotTimer(engine.state.id);
-    if (engine.state.paused || !ACTIVE_STREETS.has(engine.state.status) || engine.state.currentSeat === null) {
+    if (engine.state.recoveryRequired || engine.state.deliveryPending || engine.state.paused || !ACTIVE_STREETS.has(engine.state.status) || engine.state.currentSeat === null) {
       engine.state.turnDeadline = null;
       return;
     }
 
     const revision = engine.state.revision;
     const seatIndex = engine.state.currentSeat;
-    let duration = engine.state.actionSeconds * 1000;
+    let duration = engine.state.actionSeconds * 1000 + grace;
 
     if (!reset && engine.state.turnTimeRemaining !== null) {
       duration = Math.max(0, engine.state.turnTimeRemaining);
@@ -577,14 +833,15 @@ export class PokerHostService {
   #scheduleBotTurn(engine) {
     this.#clearBotTimer(engine.state.id);
     if (this.stopped || this.retiring) return;
-    if (engine.state.paused || !ACTIVE_STREETS.has(engine.state.status) || engine.state.currentSeat === null) return;
+    if (engine.state.recoveryRequired || engine.state.deliveryPending || engine.state.paused || !ACTIVE_STREETS.has(engine.state.status) || engine.state.currentSeat === null) return;
     const seatIndex = engine.state.currentSeat;
     const seat = engine.state.seats[seatIndex];
     if (!seat?.isBot || !normalizeBotLevel(seat.botLevel)) return;
 
     const revision = engine.state.revision;
     const handNumber = engine.state.handNumber;
-    const delay = botThinkDelay(seat.botLevel, seat.botPersonality);
+    const grace = Math.max(0, (engine.state.turnDeadline ?? 0) - engine.state.actionSeconds * 1000 - Date.now());
+    const delay = grace + botThinkDelay(seat.botLevel, seat.botPersonality);
     const timer = setTimeout(() => {
       const operation = this.queue.then(async () => {
         if (this.botTimers.get(engine.state.id) !== timer) return;
@@ -597,14 +854,14 @@ export class PokerHostService {
         let decision;
         try {
           decision = chooseBotAction(engine, seatIndex, currentSeat.botLevel, currentSeat.botPersonality);
+          engine.act(seatIndex, decision.action, decision.amount);
         } catch (error) {
           console.error("FBL Poker | Bot decision failed", error);
           const legal = engine.legalActions(seatIndex);
           if (!legal) return;
-          decision = { action: legal.canCheck ? ACTIONS.CHECK : ACTIONS.FOLD, amount: null };
+          engine.act(seatIndex, legal.canCheck ? ACTIONS.CHECK : ACTIONS.FOLD);
         }
 
-        engine.act(seatIndex, decision.action, decision.amount);
         await this.#mutated(engine, { resetTurn: true });
         await this.#afterCompletedHand(engine);
       });
@@ -613,14 +870,14 @@ export class PokerHostService {
     this.botTimers.set(engine.state.id, timer);
   }
 
-  #scheduleAutoNext(engine, { reset = false } = {}) {
+  #scheduleAutoNext(engine, { reset = false, grace = 0 } = {}) {
     const tableId = engine.state.id;
     if (this.stopped || this.retiring) {
       this.#clearAutoNextTimer(tableId);
       return;
     }
-    const eligibleCount = engine.state.seats.filter((seat) => seat && !seat.sittingOut && !seat.leaveAfterHand && seat.stack > 0).length;
-    const shouldRun = engine.state.autoNextHand && engine.state.status === TABLE_STATUS.COMPLETE && eligibleCount >= 2;
+    const eligibleCount = engine.state.seats.filter((seat) => seat && !seat.sittingOut && !seat.leaveAfterHand && !seat.sitOutAfterHand && seat.stack > 0).length;
+    const shouldRun = !engine.state.recoveryRequired && !engine.state.deliveryPending && engine.state.autoNextHand && engine.state.status === TABLE_STATUS.COMPLETE && eligibleCount >= 2;
 
     if (!shouldRun) {
       this.#clearAutoNextTimer(tableId);
@@ -632,7 +889,7 @@ export class PokerHostService {
     if (!reset && existing && engine.state.nextHandDeadline && engine.state.nextHandDeadline > Date.now()) return;
 
     this.#clearAutoNextTimer(tableId);
-    let duration = Math.max(1000, Number(engine.state.autoNextHandSeconds || 1) * 1000);
+    let duration = grace + Math.max(1000, Number(engine.state.autoNextHandSeconds || 1) * 1000);
     if (!reset && engine.state.nextHandDeadline && engine.state.nextHandDeadline > Date.now()) {
       duration = engine.state.nextHandDeadline - Date.now();
     }
@@ -646,15 +903,16 @@ export class PokerHostService {
         if (this.stopped || this.retiring || !isHostClient()) return;
         const current = this.tables.get(tableId);
         if (!current || current.state.status !== TABLE_STATUS.COMPLETE || current.state.handNumber !== handNumber || !current.state.autoNextHand) return;
-        const available = current.state.seats.filter((seat) => seat && !seat.sittingOut && !seat.leaveAfterHand && seat.stack > 0).length;
+        const available = current.state.seats.filter((seat) => seat && !seat.sittingOut && !seat.leaveAfterHand && !seat.sitOutAfterHand && seat.stack > 0).length;
         if (available < 2) {
           current.state.nextHandDeadline = null;
           current.touch();
-          await this.persist();
-          await this.broadcastAll();
+          await this.persist(current);
+          await this.#broadcastTable(current);
           return;
         }
         current.state.nextHandDeadline = null;
+        current.state.currencyRates = this.currency.rates;
         current.startHand();
         await this.#mutated(current, { sendHands: true, resetTurn: true });
       });
@@ -682,25 +940,9 @@ export class PokerHostService {
   }
 
 
-  async #recordTransaction(engine, actor, user, reason, transaction) {
-    await this.storage.appendLedger({
-      id: randomId("tx-"),
-      at: Date.now(),
-      tableId: engine.state.id,
-      tableName: engine.state.name,
-      actorId: actor.id,
-      actorName: actor.name,
-      userId: user?.id ?? null,
-      reason,
-      beforeCopper: transaction.before.totalCopper,
-      deltaCopper: transaction.deltaCopper,
-      afterCopper: transaction.after.totalCopper
-    });
-  }
-
   #ownedSeat(engine, user, seatIndex) {
     const index = safeInteger(seatIndex);
-    if (index === null) throw new Error("FBLPoker.Errors.EmptySeat");
+    if (index === null || index < 0 || index >= engine.state.maxSeats) throw new Error("FBLPoker.Errors.InvalidSeat");
     const seat = engine.state.seats[index];
     if (!seat) throw new Error("FBLPoker.Errors.EmptySeat");
     if (!user?.isGM && seat.userId !== user?.id) throw new Error("FBLPoker.Errors.NotSeatOwner");
@@ -720,6 +962,7 @@ export class PokerHostService {
   #table(id) {
     const engine = this.tables.get(id);
     if (!engine) throw new Error("FBLPoker.Errors.TableMissing");
+    if (engine.state.recoveryRequired) throw new Error("FBLPoker.Errors.RecoveryRequired");
     return engine;
   }
 }
