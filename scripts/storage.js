@@ -10,6 +10,15 @@ export class PokerStorage {
     await game.settings.set(MODULE_ID, "tables", tables);
   }
 
+  async loadHistories() {
+    const stored = game.settings.get(MODULE_ID, "tableHistories");
+    return stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+  }
+
+  async saveHistories(histories) {
+    await game.settings.set(MODULE_ID, "tableHistories", histories);
+  }
+
   async appendLedger(entry) {
     const ledger = [...(game.settings.get(MODULE_ID, "ledger") ?? [])];
     ledger.unshift(entry);

@@ -128,7 +128,11 @@
       "ShowCards": "Show cards",
       "HideCards": "Hide cards",
       "CardVisibility": "Your cards after the hand",
-      "SeatMenu": "Seat actions"
+      "SeatMenu": "Seat actions",
+      "HiddenCard": "Hidden card",
+      "RaiseAmount": "Total bet on this street",
+      "AwardedPot": "Awarded pot",
+      "WaitingForCards": "Waiting for private cards. Timer stopped; the GM can retry delivery with Refresh."
     },
     "Hands": {
       "highCard": "high card",
@@ -230,8 +234,11 @@
       "UnsupportedSchema": "This world contains poker table data from a newer module version.",
       "TableDeletePayoutFailed": "The table was retained because chips could not be returned to: {actors}. Successful payouts were completed, failed payouts were recorded, and deletion can be retried after fixing the affected Actors.",
       "InvalidCurrencyChange": "The requested currency change is invalid.",
-      "PrivateTransportUnavailable": "Secure poker transport is unavailable. Open Foundry through HTTPS or localhost and reload.",
-      "StoredTablesRejected": "Skipped {count} stored poker table(s) because their data is invalid or from a newer module version. The original data was preserved."
+      "PrivateTransportUnavailable": "Private poker transport is unavailable. Check that the player role has permission to query other users and reload Foundry.",
+      "StoredTablesRejected": "Skipped {count} stored poker table(s) because their data is invalid or from a newer module version. The original data was preserved.",
+      "RecoveryRequired": "Table stopped: saved state needs reconciliation. GM: refresh, then open reconciliation in the title bar.",
+      "CurrencyChanged": "Actor balance changed during the operation. Reconciliation required.",
+      "StaleRequest": "The table has changed. Refresh and try the action again."
     },
     "CashOut": {
       "Title": "Leave Table",
@@ -278,7 +285,8 @@
       "Move": "Move Seat",
       "MoveFrom": "Move from seat",
       "MoveTo": "to seat",
-      "AlreadyAtOtherTable": "You are already seated at another table:"
+      "AlreadyAtOtherTable": "You are already seated at another table:",
+      "GMFundingHint": "A GM may seat any character even with an empty wallet: available funds are charged, and the GM grants the missing chips."
     },
     "SoundSettings": {
       "Title": "Poker Sound Settings",
@@ -317,6 +325,20 @@
         "risky": "Risky",
         "reckless": "Reckless"
       }
+    },
+    "Suits": {
+      "s": "spades",
+      "h": "hearts",
+      "d": "diamonds",
+      "c": "clubs"
+    },
+    "Recovery": {
+      "Title": "Reconcile operation",
+      "Instructions": "Ensure the earlier Actor request has finished (reload the GM client if needed). Compare the Actor wallet and these copper totals with its change history. Choose only a verified outcome. This updates the table, not the wallet. Cancel if uncertain.",
+      "Applied": "Wallet changed",
+      "NotApplied": "Wallet unchanged",
+      "Cancel": "Cancel",
+      "Reload": "No pending money operations. If the table remains blocked, reload the GM client; an active hand is cancelled and its bets refunded."
     }
   }
 }

@@ -1,3 +1,54 @@
+## 1.7.12
+
+- Preserved card, chip and pot animation progress across template replacement. Card trajectories now start at the measured deck position and adapt to window resizing; the deck pulse has a finite duration.
+- Unified visual and audio timing, delayed the result banner and winner highlight until the board finishes, and cancelled obsolete turn notifications. Closing actions remain audible when street/result logs follow them; forced bets have a chip sound.
+- Cleared presentation effects on pause, reset, recovery and failed private delivery. Reduced motion skips visual waits; opening a table does not replay old effects.
+- Added the shared deal allowance to host turn, bot and next-hand scheduling, including early actions and overlapping streets. Countdown displays retain the configured action allowance during dealing.
+- Added presentation regressions and host scheduling checks; verified actual template replacement, trajectories, finite deck animation, result timing and cleanup in isolated Chrome.
+
+## 1.7.11
+
+- Extended the GM buy-in override to all characters, including manually controlled seats. Available funds are charged, and any missing amount is granted and recorded as `subsidyCopper`; an empty wallet does not block GM seating.
+- Added an explanation to the seat dialog and updated the manual. Covered empty, partial and sufficient wallets for manual seats and bots, ordinary-player rejection, replay protection and cash-out.
+
+## 1.7.10
+
+- Fixed dry side-pot completion and pot conservation; reset now refunds only active hands. Corrected cumulative short-all-in reopening, nominal short big blinds, short opening bets, all-in availability, and bot fallback execution. Shared legal-action rules with the UI and removed shuffle modulo bias.
+- Added a durable monetary intent journal, same-write Actor transaction markers, replay receipts, fail-closed recovery and a GM reconciliation dialog. Buy-ins, top-ups, cash-outs, deferred exits and deletion payouts use the same commit path. Top-ups recheck Actor ownership; bot subsidies are explicitly recorded.
+- Added expected-state command validation, request deduplication, real broadcast-sender checks, host epochs, ordered snapshots and deletion tombstones. Connection changes refresh authority through `userConnected`. Failed private delivery publishes a barrier with stopped timers; refresh retries delivery. Secondary GMs receive bot metadata privately.
+- Preserved raise drafts, guarded double clicks and delayed confirmations, reused open table windows, cancelled pending sounds, and corrected turn notifications. Added card/input accessibility labels, reduced-motion support and targeted status announcements.
+- Preserved names in logs/results, fixed negative net winnings display and seat numbering, recorded per-hand currency settings, clarified completed-pot display, and logged all runout streets. Updated version, authority, timer and recovery documentation.
+- Added regression coverage for 32 monetary failure boundaries, reload/replay, stale/out-of-order messages, clock skew, UI state, connections/window lifetime, poker edge cases and 1000 conservation hands. Existing evaluator equivalence coverage still checks 20,000 seeded hands.
+
+## 1.7.9
+
+- Recovered remote player sessions automatically when the active GM still has the same user ID but its in-memory poker session registry was recreated, preventing stale tokens from producing `FBLPoker.Errors.InvalidSession` until a full client reload.
+- Deduplicated concurrent session re-establishment so several simultaneous player requests share one provisioning handshake.
+- Retried exactly once after an `InvalidSession` rejection; the rejected request cannot have mutated table state because session validation happens before request dispatch.
+- Treated this stale-session rejection as recoverable transport state instead of emitting a red host-console error before the automatic retry.
+
+## 1.7.8
+
+- Split completed-hand history out of the hot live-table setting. Normal poker mutations now persist only compact live state, while the capped 100-hand archive is written only when history actually changes; existing embedded histories migrate automatically without changing what players can view or export.
+- Replaced all-table public broadcasts after ordinary mutations with changed-table deltas, preserving full snapshots for startup/recovery and targeted refreshes.
+- Added granular application invalidation so table windows ignore other tables, history windows rerender only when their own history changes, and the lobby rerenders only when fields visible in the lobby change.
+- Made explicit state refreshes targeted to the requesting player instead of broadcasting the same recovery snapshot to every connected client.
+- Parallelized independent private hole-card deliveries while retaining the strict barrier that all deliveries must complete before the public hand update.
+- Coalesced bursty `updateUser` host-role refreshes into one pending refresh and removed idle 4 Hz table countdown polling when no deadline is active.
+- Replaced the allocation-heavy combination-based 6/7-card evaluator with a direct evaluator while preserving hand-ranking results; added seeded equivalence regression coverage against the previous implementation.
+- Avoided rewriting unchanged current-schema table settings during clean host startup.
+- Added regression coverage for history migration, delta/history merging, targeted refreshes, clean startup, and parallel private delivery.
+
+## 1.7.7
+
+- Replaced the runtime ECDH/Web Crypto dependency with Foundry VTT v13 targeted user queries for host-provisioned private sessions, remote requests, private errors, and hole-card delivery.
+- Restored player access when Foundry is opened through a local-network plain-HTTP address where `crypto.subtle` is unavailable.
+- Kept session tokens and private payloads off the broadcast module socket, with session tokens provisioned by the active GM directly to each active player, while retaining broadcast public table snapshots.
+- Resent current private hole cards during an explicit state refresh so reconnecting players recover an active hand after their query session is established.
+- Prevented the lobby from rendering before poker runtime initialization, avoiding uncaught `FBLPoker.Errors.NotReady` render failures.
+- Cleared cached private hands on active-host changes and awaited candidate socket shutdown after initialization failure.
+- Added regression coverage for remote player synchronization and authorization with `crypto.subtle` deliberately unavailable.
+
 ## 1.7.6
 
 - Rejected decimal, exponent-form, partially numeric, blank, and unsafe-integer form values before sending table, seat, top-up, or betting requests.

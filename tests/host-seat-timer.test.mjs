@@ -99,13 +99,6 @@ try {
   await socket.request(REQUEST.JOIN, { tableId, seatIndex: 0, actorId: "a1", buyIn: 40 });
   await socket.request(REQUEST.JOIN, { tableId, seatIndex: 1, actorId: "a2", buyIn: 40 });
 
-  await assert.rejects(
-    socket.request(REQUEST.JOIN, { tableId, seatIndex: 2, actorId: "a3", buyIn: 40 }),
-    /NotEnoughCurrency/,
-    "The GM short-wallet override must not apply to manually controlled Actors."
-  );
-  assert.equal(socket.getTable(tableId).seats[2], null);
-
   await socket.request(REQUEST.JOIN, {
     tableId,
     seatIndex: 2,
@@ -127,15 +120,29 @@ try {
   const firstStateUpdate = hookEvents.indexOf("fblPokerStateUpdated");
   assert.ok(firstPrivateUpdate >= 0 && firstStateUpdate > firstPrivateUpdate, "Private hands must arrive before the public snapshot to avoid replaying the deal animation.");
   const before = socket.getTable(tableId).turnDeadline;
+  assert.ok(before - Date.now() > 45000 && before - Date.now() <= 46220, "Three-player dealing gets 1220 ms before the full action allowance");
   const activeSeat = socket.getTable(tableId).currentSeat;
   await new Promise((resolve) => setTimeout(resolve, 20));
   await socket.request(REQUEST.TOGGLE_LEAVE_AFTER_HAND, { tableId, seatIndex: activeSeat });
   const after = socket.getTable(tableId).turnDeadline;
   assert.ok(Math.abs(after - before) < 1000, `Queued seat controls must preserve the deadline. before=${before}, after=${after}`);
 
+  const scheduled = new Map();
+  const schedule = globalThis.setTimeout;
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    const timer = schedule(callback, delay, ...args);
+    scheduled.set(timer, delay);
+    return timer;
+  };
+  try { await socket.request(REQUEST.ACTION, { tableId, seatIndex: activeSeat, action: "call" }); }
+  finally { globalThis.setTimeout = schedule; }
+  assert.ok(Math.abs(socket.getTable(tableId).turnDeadline - before) < 100, "An early action must carry the unfinished deal allowance to the next player");
+  const botDelay = scheduled.get(socket.hostService.botTimers.get(tableId));
+  assert.ok(botDelay >= before - 45000 - Date.now() + 1900, "The novice calm bot's thinking delay begins after the remaining deal allowance");
+
   await socket.request(REQUEST.PAUSE_TABLE, { tableId });
   const remaining = socket.getTable(tableId).turnTimeRemaining;
-  assert.ok(remaining > 0 && remaining < 45000);
+  assert.ok(remaining > 0 && remaining <= 46220, "Pausing preserves both action time and any remaining deal allowance");
   await new Promise((resolve) => setTimeout(resolve, 20));
   await socket.request(REQUEST.RESUME_TABLE, { tableId });
   const resumed = socket.getTable(tableId).turnDeadline;

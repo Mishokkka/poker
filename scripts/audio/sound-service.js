@@ -84,10 +84,21 @@ export class PokerSoundService {
     }
   }
 
-  static playSequence(id, count, interval = 120, startDelay = 0) {
+  static playSequence(id, count, interval = 120, startDelay = 0, signal = null) {
+    const timers = new Set();
+    const cancel = () => { for (const timer of timers) clearTimeout(timer); timers.clear(); signal?.removeEventListener("abort", cancel); };
+    if (signal?.aborted) return cancel;
+    signal?.addEventListener("abort", cancel, { once: true });
     const total = Math.max(0, Number.parseInt(count, 10) || 0);
     for (let index = 0; index < total; index += 1) {
-      setTimeout(() => this.play(id), startDelay + (index * interval));
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        if (!signal?.aborted) void this.play(id);
+        if (!timers.size) signal?.removeEventListener("abort", cancel);
+      }, startDelay + index * interval);
+      timers.add(timer);
     }
+    if (!total) cancel();
+    return cancel;
   }
 }

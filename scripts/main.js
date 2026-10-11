@@ -1,4 +1,4 @@
-import { MODULE_ID, REQUEST, SCHEMA_VERSION } from "./constants.js";
+import { MODULE_ID, QUERY_NAME, REQUEST, SCHEMA_VERSION } from "./constants.js";
 import { defaultSoundSettings } from "./audio/sound-service.js";
 import { PokerLobbyApp } from "./apps/lobby-app.js";
 import { PokerTableApp } from "./apps/table-app.js";
@@ -8,8 +8,14 @@ import { notifyError } from "./util.js";
 
 let socket = null;
 let lobby = null;
+const tableApps = new Map();
+let hostRefreshTimer = null;
 
 function openLobby() {
+  if (!socket) {
+    ui.notifications?.warn(game.i18n.localize("FBLPoker.Errors.NotReady"));
+    return null;
+  }
   if (lobby?.rendered) {
     lobby.bringToFront();
     return lobby;
@@ -25,18 +31,36 @@ function openTable(tableId) {
     ui.notifications?.warn(game.i18n.localize("FBLPoker.Errors.TableMissing"));
     return null;
   }
+  const existing = tableApps.get(tableId);
+  if (existing) { existing.render({ force: true }); existing.bringToFront?.(); return existing; }
   const app = new PokerTableApp({ tableId });
+  tableApps.set(tableId, app);
   app.render({ force: true });
   return app;
 }
 
 Hooks.once("init", () => {
+  CONFIG.queries[QUERY_NAME] = async (payload) => {
+    if (!socket) return { ok: false, message: "FBLPoker.Errors.NotReady" };
+    return socket.handleQuery(payload);
+  };
+
   game.settings.register(MODULE_ID, "tables", {
     scope: "world",
     config: false,
     type: Object,
     default: {}
   });
+
+  game.settings.register(MODULE_ID, "tableHistories", {
+    scope: "world",
+    config: false,
+    type: Object,
+    default: {}
+  });
+
+  game.settings.register(MODULE_ID, "networkEpoch", { scope: "world", config: false, type: Number, default: 0 });
+  game.settings.register(MODULE_ID, "moneyJournal", { scope: "world", config: false, type: Object, default: {} });
 
   game.settings.register(MODULE_ID, "ledger", {
     scope: "world",
@@ -109,7 +133,7 @@ Hooks.once("ready", async () => {
   try {
     await candidate.initialize();
   } catch (error) {
-    candidate.shutdown();
+    await candidate.shutdown();
     notifyError(error);
     return;
   }
@@ -124,17 +148,31 @@ Hooks.once("ready", async () => {
     REQUEST
   });
 
+  void socket.synchronize().catch((error) => {
+    console.warn("FBL Poker | Initial synchronization failed", error);
+  });
+
   if (game.system.id !== "forbidden-lands") {
     ui.notifications?.warn(game.i18n.localize("FBLPoker.Errors.WrongSystem"));
   }
 });
 
-Hooks.on("updateUser", () => {
-  setTimeout(() => {
+function scheduleHostRefresh() {
+  clearTimeout(hostRefreshTimer);
+  hostRefreshTimer = setTimeout(() => {
+    hostRefreshTimer = null;
     if (!socket) return;
-    void socket.refreshHostRole().catch((error) => {
-      console.error("FBL Poker | Delayed host-role refresh failed", error);
-      ui.notifications?.error(game.i18n.localize("FBLPoker.Errors.InitializationFailed"));
-    });
+    void socket.refreshHostRole()
+      .then(() => socket.provisionActiveSessions())
+      .then(() => socket.synchronize())
+      .catch((error) => {
+        console.error("FBL Poker | Delayed host-role refresh failed", error);
+        ui.notifications?.error(game.i18n.localize("FBLPoker.Errors.InitializationFailed"));
+      });
   }, 250);
+}
+Hooks.on("userConnected", scheduleHostRefresh);
+Hooks.on("updateUser", (_user, changes) => {
+  if (["active", "role"].some((key) => Object.hasOwn(changes ?? {}, key))) scheduleHostRefresh();
 });
+Hooks.on("closePokerTableApp", (app) => { if (tableApps.get(app.tableId) === app) tableApps.delete(app.tableId); });

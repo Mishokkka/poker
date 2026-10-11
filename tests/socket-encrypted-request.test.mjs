@@ -1,12 +1,38 @@
 import assert from "node:assert/strict";
-import { webcrypto } from "node:crypto";
 
-Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto });
-globalThis.btoa ??= (value) => Buffer.from(value, "binary").toString("base64");
-globalThis.atob ??= (value) => Buffer.from(value, "base64").toString("binary");
+let randomCall = 0;
+Object.defineProperty(globalThis, "crypto", {
+  configurable: true,
+  value: {
+    getRandomValues(array) {
+      randomCall += 1;
+      for (let index = 0; index < array.length; index += 1) array[index] = (index * 29 + 5 + randomCall) & 0xff;
+      return array;
+    }
+  }
+});
 
+let deliveredSession = null;
+const player = {
+  id: "player",
+  active: true,
+  isGM: false,
+  async query(_name, payload) {
+    if (payload.kind === "sessionDelivery") {
+      deliveredSession = structuredClone(payload);
+      return { ok: true };
+    }
+    if (payload.kind === "delivery") return { ok: true };
+    return { ok: false, message: "FBLPoker.Errors.InvalidRequest" };
+  }
+};
+const otherPlayer = {
+  id: "other-player",
+  active: true,
+  isGM: false,
+  async query() { return { ok: true }; }
+};
 const gm = { id: "gm", active: true, isGM: true };
-const player = { id: "player", active: true, isGM: false };
 const settings = new Map([
   ["fbl-poker-table.tables", {}],
   ["fbl-poker-table.ledger", []],
@@ -17,7 +43,10 @@ const emitted = [];
 
 globalThis.game = {
   user: gm,
-  users: { contents: [gm, player], get: (id) => [gm, player].find((user) => user.id === id) ?? null },
+  users: {
+    contents: [gm, player, otherPlayer],
+    get: (id) => [gm, player, otherPlayer].find((user) => user.id === id) ?? null
+  },
   actors: { get: () => null },
   settings: {
     get: (moduleId, key) => settings.get(`${moduleId}.${key}`),
@@ -36,32 +65,53 @@ globalThis.ui = { notifications: { error() {}, warn() {} } };
 globalThis.foundry = { utils: { deepClone: structuredClone } };
 
 const { PokerSocket } = await import("../scripts/network/socket.js");
-const { SessionCrypto } = await import("../scripts/network/crypto.js");
 const { REQUEST } = await import("../scripts/constants.js");
-const playerCrypto = new SessionCrypto();
-await playerCrypto.initialize();
 const socket = new PokerSocket();
 
 try {
   await socket.initialize();
-  await listener({
-    type: REQUEST.HELLO,
-    userId: player.id,
+  assert.ok(listener);
+  assert.equal(globalThis.crypto.subtle, undefined, "Host query routing must not require crypto.subtle.");
+
+  const provision = await socket.handleQuery({
+    kind: "provisionSessions",
     hostUserId: gm.id,
-    publicKey: playerCrypto.publicKey
+    userId: otherPlayer.id
   });
+  assert.equal(provision.ok, true);
+  assert.equal(provision.hostUserId, gm.id);
+  assert.ok(deliveredSession?.token, "The host must deliver a session token directly to the target player.");
+  assert.equal(deliveredSession.userId, player.id);
+  assert.equal(emitted.some(({ payload }) => JSON.stringify(payload).includes(deliveredSession.token)), false, "Query session tokens must stay off the broadcast socket.");
 
-  const sessionEnvelope = emitted.findLast(({ payload }) => payload.type === REQUEST.PRIVATE && payload.recipient === player.id)?.payload;
-  assert.ok(sessionEnvelope);
-  const session = await playerCrypto.decrypt(sessionEnvelope.senderPublicKey, sessionEnvelope.encrypted);
-  assert.equal(session.kind, "session");
+  const previousEpoch = await socket.handleQuery({ kind: "request", protocol: 2, epoch: socket.epoch - 1, hostUserId: gm.id, userId: player.id, token: deliveredSession.token, requestId: "prior-epoch", type: REQUEST.REQUEST_STATE, data: {} });
+  assert.equal(previousEpoch.message, "FBLPoker.Errors.InvalidSession", "A same-user host restart must trigger the existing session recovery handshake");
 
-  const requestId = "remote-create";
-  const request = {
-    kind: "request",
+  const directMint = await socket.handleQuery({
+    kind: "session",
+    hostUserId: gm.id,
+    userId: otherPlayer.id
+  });
+  assert.equal(directMint.ok, false, "A requester must not be able to mint a token for an arbitrary user identity.");
+
+  const impersonation = await socket.handleQuery({
+    kind: "request", protocol: 2, epoch: socket.epoch,
+    hostUserId: gm.id,
+    type: REQUEST.REQUEST_STATE,
+    data: {},
+    userId: otherPlayer.id,
+    token: deliveredSession.token,
+    requestId: "spoofed-state"
+  });
+  assert.equal(impersonation.ok, false, "A token provisioned for one player must not authorize another user id.");
+  assert.equal(impersonation.message, "FBLPoker.Errors.InvalidSession");
+
+  const rejected = await socket.handleQuery({
+    kind: "request", protocol: 2, epoch: socket.epoch,
+    hostUserId: gm.id,
     type: REQUEST.CREATE_TABLE,
     data: {
-      name: "Encrypted Request",
+      name: "Unauthorized Request",
       maxSeats: 2,
       smallBlind: 1,
       bigBlind: 2,
@@ -72,28 +122,26 @@ try {
       chipValueCopper: 1
     },
     userId: player.id,
-    token: session.token,
-    requestId
-  };
+    token: deliveredSession.token,
+    requestId: "remote-create"
+  });
 
-  const readableEnvelope = {
-    type: REQUEST.PRIVATE,
-    recipient: gm.id,
-    senderPublicKey: playerCrypto.publicKey,
-    encrypted: await playerCrypto.encrypt(sessionEnvelope.senderPublicKey, request)
-  };
-  assert.equal(JSON.stringify(readableEnvelope).includes(session.token), false, "Remote session tokens must remain inside ciphertext.");
-  await listener(readableEnvelope);
+  assert.equal(rejected.ok, false, "A non-GM targeted query must still be rejected by host authorization.");
+  assert.equal(rejected.message, "FBLPoker.Errors.GMOnly");
+  assert.equal(socket.tables.size, 0);
 
-  assert.equal(socket.tables.size, 0, "A non-GM encrypted request must still be rejected by host authorization.");
-  const errorEnvelope = emitted.findLast(({ payload }) => payload.type === REQUEST.PRIVATE && payload.recipient === player.id)?.payload;
-  assert.ok(errorEnvelope, "The host must return an encrypted error envelope for a rejected request.");
-  const error = await playerCrypto.decrypt(errorEnvelope.senderPublicKey, errorEnvelope.encrypted);
-  assert.equal(error.kind, "error");
-  assert.equal(error.requestId, requestId);
-  assert.equal(error.message, "FBLPoker.Errors.GMOnly");
+  const stateRequest = await socket.handleQuery({
+    kind: "request", protocol: 2, epoch: socket.epoch,
+    hostUserId: gm.id,
+    type: REQUEST.REQUEST_STATE,
+    data: {},
+    userId: player.id,
+    token: deliveredSession.token,
+    requestId: "remote-state"
+  });
+  assert.equal(stateRequest.ok, true, "Authorized player requests must complete through Foundry v13 targeted queries.");
 } finally {
   await socket.shutdown();
 }
 
-console.log("Encrypted remote request routing and authorization test passed.");
+console.log("Targeted query request routing and authorization test passed.");

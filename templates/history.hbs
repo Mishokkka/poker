@@ -38,7 +38,7 @@
                   <td>{{actorName}}{{#if folded}} <small>({{localize "FBLPoker.Actions.fold"}})</small>{{/if}}</td>
                   <td><div class="fbl-poker-inline-cards">{{#each cardsView}}<span class="{{#if red}}red{{/if}}">{{rank}}{{symbol}}</span>{{else}}<span>—</span>{{/each}}</div></td>
                   <td>{{startingStack}} → {{endingStack}}</td>
-                  <td class="{{#if won}}positive{{/if}}">{{#if won}}+{{/if}}{{delta}}</td>
+                  <td class="{{#if positive}}positive{{/if}}">{{#if positive}}+{{/if}}{{delta}}</td>
                 </tr>
               {{/each}}
             </tbody>
